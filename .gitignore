@@ -1,0 +1,31 @@
+echo "# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+*.log
+data/
+*.db
+*.sqlite3
+.DS_Store
+
+# Cursor specific
+.cursor/
+
+# API Keys and Secrets
+config/secrets.yaml
+*.pem
+*.key" > .gitignore
