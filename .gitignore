@@ -28,4 +28,4 @@ data/
 # API Keys and Secrets
 config/secrets.yaml
 *.pem
-*.key" > .gitignore
+*.key" > .gitignorecredentials/

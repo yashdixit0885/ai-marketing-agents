@@ -1,0 +1,47 @@
+# Core
+fastapi
+uvicorn
+python-dotenv
+pydantic
+
+# Google Cloud & Gemini
+google-cloud-aiplatform
+google-cloud-storage
+google-generativeai
+
+# Database
+sqlalchemy
+psycopg2-binary
+alembic
+
+# Task Queue
+celery
+redis
+
+# API Clients
+requests
+python-linkedin-v2
+tweepy
+
+# Data Processing
+pandas
+numpy
+beautifulsoup4
+feedparser
+
+# Visualization
+matplotlib
+plotly
+pillow
+
+# Testing
+pytest
+pytest-asyncio
+pytest-cov
+
+# Utilities
+python-dateutil
+pytz
+loguru
+
+medium-sdk
