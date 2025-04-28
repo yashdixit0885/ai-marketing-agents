@@ -150,6 +150,16 @@ def mock_gemini_client(monkeypatch):
                 """
             elif "quote" in prompt.lower():
                 return """AI adoption increased 35% in enterprise businesses in 2024, with 62% reporting positive ROI on their implementations."""
+            elif "infographic" in prompt.lower():
+                return """
+                {
+                    "points": [
+                        {"headline": "AI Adoption Rising", "description": "35% increase in enterprise adoption in 2024"},
+                        {"headline": "Positive ROI", "description": "62% of companies report positive returns"},
+                        {"headline": "Data Quality Matters", "description": "Primary challenge for implementation"}
+                    ]
+                }
+                """
             else:
                 return "Generated content for: " + prompt[:50] + "..."
                 

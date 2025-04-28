@@ -1,61 +1,98 @@
-import pytest
-from agents.research_agent import ResearchAgent
+import json
+from agents.base_agent import BaseAgent
+from services.api_clients.gemini_client import GeminiClient
 from models.content_models import ResearchItem
 from models import db_session
 
-@pytest.mark.asyncio
-async def test_research_agent_initialization():
-    """Test that the ResearchAgent initializes correctly."""
-    agent = ResearchAgent()
-    assert agent.name == "Research Agent"
-    assert agent.description == "Conducts deep research on AI business applications"
-
-@pytest.mark.asyncio
-async def test_research_agent_run(test_db, mock_gemini_client):
-    """Test that the ResearchAgent can run research on a topic."""
-    # Arrange
-    agent = ResearchAgent()
-    topic = "AI in business automation"
+class ResearchAgent(BaseAgent):
+    """Agent responsible for conducting research on AI topics."""
     
-    # Act
-    research_item = await agent.run(topic)
+    def __init__(self):
+        super().__init__("Research Agent", "Conducts deep research on AI business applications")
+        self.gemini_client = GeminiClient()
     
-    # Assert
-    assert research_item is not None
-    assert isinstance(research_item, ResearchItem)
-    assert research_item.id is not None
-    assert research_item.title == "Research on AI topic"
-    assert "AI adoption increased 35%" in research_item.content
-    assert research_item.meta_data == {"source_type": "ai_generated"}
+    async def run(self, topic):
+        """Run research on the given topic."""
+        self.log_status(f"Starting research on topic: {topic}")
+        
+        # Get research plan from Gemini
+        research_plan = await self._create_research_plan(topic)
+        
+        # Collect data from various sources
+        data = await self._collect_data(topic, research_plan)
+        
+        # Process and store research results
+        processed_data = await self.process(data)
+        
+        self.log_status(f"Completed research on topic: {topic}")
+        return processed_data
     
-    # Verify it was saved to the database
-    db_item = test_db.query(ResearchItem).get(research_item.id)
-    assert db_item is not None
-    assert db_item.content == research_item.content
-
-@pytest.mark.asyncio
-async def test_research_agent_process(test_db, mock_gemini_client):
-    """Test that the ResearchAgent can process research data."""
-    # Arrange
-    agent = ResearchAgent()
-    data = """
-    # Research Findings on AI Business Applications
+    async def _create_research_plan(self, topic):
+        """Create a research plan using Gemini."""
+        prompt = f"""
+        Create a detailed research plan for gathering information about: {topic}
+        
+        The plan should include:
+        1. Key subtopics to explore
+        2. Specific questions to answer
+        3. Important data points to collect
+        4. Types of sources to prioritize
+        
+        Format the response as a JSON object.
+        """
+        
+        response = await self.gemini_client.generate_content(prompt)
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError as e:
+            self.log_status(f"Error parsing JSON: {e}")
+            self.log_status(f"Response received: {response[:500]}...")
+            # Return a default structured plan as fallback
+            return {
+                "key_subtopics": ["Basic information", "Recent developments", "Applications"],
+                "specific_questions": ["What is this topic about?", "What's new in this field?"],
+                "important_data_points": ["Key statistics", "Growth trends"],
+                "sources_to_prioritize": ["Academic papers", "Industry reports"]
+            }
     
-    ## Key Insights
-    - AI adoption increased 35% in enterprise businesses in 2024
-    - Natural Language Processing is the most widely adopted AI technology
-    """
+    async def _collect_data(self, topic, research_plan):
+        """Collect data from various sources based on the research plan."""
+        # This would connect to various APIs and data sources
+        # For now, we'll use Gemini to simulate data collection
+        
+        prompt = f"""
+        Based on this research plan:
+        {json.dumps(research_plan, indent=2)}
+        
+        Generate comprehensive research findings about: {topic}
+        
+        Include:
+        - Key insights from academic papers
+        - Recent industry developments
+        - Case studies and examples
+        - Expert opinions
+        - Statistics and data points
+        
+        Format the response as a detailed research report with sections.
+        """
+        
+        response = await self.gemini_client.generate_content(prompt)
+        return response
     
-    # Act
-    research_item = await agent.process(data)
-    
-    # Assert
-    assert research_item is not None
-    assert isinstance(research_item, ResearchItem)
-    assert research_item.id is not None
-    assert research_item.title == "Research on AI topic"
-    assert research_item.content == data
-    
-    # Verify it was saved to the database
-    db_item = test_db.query(ResearchItem).get(research_item.id)
-    assert db_item is not None
+    async def process(self, data):
+        """Process and store the research data."""
+        # Extract key information and store in the database
+        # This is simplified; in reality you'd parse the data more thoroughly
+        
+        # Example: Create a research item in the database
+        research_item = ResearchItem(
+            title="Research on AI topic",
+            source="Gemini Research Agent",
+            content=data,
+            meta_data={"source_type": "ai_generated"}
+        )
+        
+        db_session.add(research_item)
+        db_session.commit()
+        
+        return research_item

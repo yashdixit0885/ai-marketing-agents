@@ -42,7 +42,18 @@ class ResearchAgent(BaseAgent):
         """
         
         response = await self.gemini_client.generate_content(prompt)
-        return json.loads(response)
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError as e:
+            self.log_status(f"Error parsing JSON: {e}")
+            self.log_status(f"Response received: {response[:500]}...")
+            # Return a default structured plan as fallback
+            return {
+                "key_subtopics": ["Basic information", "Recent developments", "Applications"],
+                "specific_questions": ["What is this topic about?", "What's new in this field?"],
+                "important_data_points": ["Key statistics", "Growth trends"],
+                "sources_to_prioritize": ["Academic papers", "Industry reports"]
+            }
     
     async def _collect_data(self, topic, research_plan):
         """Collect data from various sources based on the research plan."""

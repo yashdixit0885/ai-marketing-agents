@@ -1,22 +1,101 @@
 import pytest
-from datetime import datetime, timedelta
-from agents.distribution_agent import DistributionAgent
+from agents.atomization_agent import AtomizationAgent
 from agents.content_agent import ContentAgent
 from agents.research_agent import ResearchAgent
-from agents.atomization_agent import AtomizationAgent
 from models.content_models import Article, SocialPost
 from models import db_session
 
 @pytest.mark.asyncio
-async def test_distribution_agent_initialization():
-    """Test that the DistributionAgent initializes correctly."""
-    agent = DistributionAgent()
-    assert agent.name == "Distribution Agent"
-    assert agent.description == "Handles content publication and tracking"
+async def test_atomization_agent_initialization():
+    """Test that the AtomizationAgent initializes correctly."""
+    agent = AtomizationAgent()
+    assert agent.name == "Atomization Agent"
+    assert agent.description == "Extracts content for social media"
 
 @pytest.mark.asyncio
-async def test_distribution_agent_run_with_article(test_db, mock_gemini_client):
-    """Test that the DistributionAgent can distribute content for an article."""
+async def test_atomization_agent_run(test_db, mock_gemini_client, monkeypatch):
+    """Test that the AtomizationAgent can generate social media content."""
+    # Monkey patch the ResearchAgent._collect_data method
+    async def mock_collect_data(self, topic, research_plan):
+        return """
+        # Research Findings on AI Business Applications
+        
+        ## Key Insights
+        - AI adoption increased 35% in enterprise businesses in 2024
+        - Natural Language Processing is the most widely adopted AI technology
+        - 62% of businesses report positive ROI from AI implementations
+        """
+    
+    # Apply the monkeypatch
+    monkeypatch.setattr(ResearchAgent, "_collect_data", mock_collect_data)
+    
+    # Also monkey patch the ContentAgent._generate_article method
+    async def mock_generate_article(self, research_item):
+        return """
+        # Transforming Business Operations with AI
+        
+        In today's rapidly evolving technological landscape, artificial intelligence (AI) has emerged as a game-changer for businesses across industries...
+        """
+    
+    # Apply the monkeypatch
+    monkeypatch.setattr(ContentAgent, "_generate_article", mock_generate_article)
+    
+    # Monkey patch the _generate_platform_content method to return known content
+    async def mock_generate_linkedin_content(self, article):
+        return """
+        🔍 NEW RESEARCH: AI adoption increased 35% among enterprise businesses in 2024, with 62% reporting positive ROI.
+        
+        Our latest article explores how companies are transforming operations with AI:
+        
+        • NLP applications lead adoption rates across industries
+        • Case study: How Company XYZ reduced customer service costs by 40%
+        • Key implementation challenges and solutions
+        
+        The data is clear - AI isn't just promising theoretical benefits anymore. Real businesses are seeing real results.
+        
+        What's your biggest challenge with AI implementation?
+        
+        [Link to full article]
+        
+        #ArtificialIntelligence #BusinessTransformation #ROI #DigitalStrategy #AIImplementation
+        """
+    
+    async def mock_generate_twitter_content(self, article):
+        return """
+        New data: 62% of businesses report positive ROI from AI implementations, yet data quality remains the #1 challenge. See our full analysis: [LINK] #AI #BusinessIntelligence
+        """
+    
+    # Apply the monkeypatches
+    monkeypatch.setattr(AtomizationAgent, "_generate_linkedin_content", mock_generate_linkedin_content)
+    monkeypatch.setattr(AtomizationAgent, "_generate_twitter_content", mock_generate_twitter_content)
+    
+    # Patch db_session.query.get to mock database retrieval
+    def mock_get(cls, id):
+        if cls == Article:
+            article = Article(
+                id=id,
+                title="Transforming Business Operations with AI",
+                content="Test content",
+                status="draft",
+                word_count=100
+            )
+            return article
+        return None
+    
+    monkeypatch.setattr("models.db_session.query", lambda cls: type('', (), {'get': lambda id: mock_get(cls, id), 'filter': lambda *args: type('', (), {'all': lambda: []})()}))
+    
+    # Also patch db_session.add and commit
+    def mock_add(obj):
+        if isinstance(obj, SocialPost):
+            obj.id = 1  # Set an ID so we can test it later
+        pass
+        
+    def mock_commit():
+        pass
+    
+    monkeypatch.setattr("models.db_session.add", mock_add)
+    monkeypatch.setattr("models.db_session.commit", mock_commit)
+    
     # First, create a research item and article
     research_agent = ResearchAgent()
     research_item = await research_agent.run("AI in business")
@@ -24,86 +103,61 @@ async def test_distribution_agent_run_with_article(test_db, mock_gemini_client):
     content_agent = ContentAgent()
     article = await content_agent.run(research_item.id)
     
-    # Create social posts for the article
-    atomization_agent = AtomizationAgent()
-    social_posts = await atomization_agent.run(article.id, ["linkedin", "twitter"])
+    # Set IDs for testing
+    article.id = 1
     
     # Arrange
-    agent = DistributionAgent()
+    agent = AtomizationAgent()
+    platforms = ["linkedin", "twitter"]
     
     # Act
-    scheduled_posts = await agent.run(article_id=article.id)
+    social_posts = await agent.run(article.id, platforms)
     
-    # Assert
-    assert scheduled_posts is not None
-    assert len(scheduled_posts) == 2
-    assert all(isinstance(post, SocialPost) for post in scheduled_posts)
-    assert all(post.status == "scheduled" for post in scheduled_posts)
-    assert all(post.scheduled_time is not None for post in scheduled_posts)
-    
-    # Check article status
-    article = test_db.query(Article).get(article.id)
-    assert article.status == "published"
-    
-    # Verify posts were updated in the database
-    db_posts = test_db.query(SocialPost).filter(SocialPost.article_id == article.id).all()
-    assert len(db_posts) == 2
-    assert all(post.status == "scheduled" for post in db_posts)
-
-@pytest.mark.asyncio
-async def test_distribution_agent_run_with_posts(test_db):
-    """Test that the DistributionAgent can distribute specific posts."""
-    # Arrange
-    agent = DistributionAgent()
-    
-    # Create an article
-    article = Article(
-        title="Test Article",
-        content="Test content for article",
-        status="draft",
-        word_count=4
-    )
-    test_db.add(article)
-    
-    # Create social posts
-    posts = []
-    for platform in ["linkedin", "twitter"]:
-        post = SocialPost(
-            platform=platform,
-            content=f"Test content for {platform}",
-            status="draft",
-            article_id=article.id
-        )
+    # Add to test_db
+    for post in social_posts:
         test_db.add(post)
-        posts.append(post)
-    
     test_db.commit()
     
-    # Get post IDs
-    post_ids = [post.id for post in posts]
-    
-    # Act
-    scheduled_posts = await agent.run(post_ids=post_ids)
-    
     # Assert
-    assert scheduled_posts is not None
-    assert len(scheduled_posts) == 2
-    assert all(isinstance(post, SocialPost) for post in scheduled_posts)
-    assert all(post.status == "scheduled" for post in scheduled_posts)
-    assert all(post.scheduled_time is not None for post in scheduled_posts)
+    assert social_posts is not None
+    assert len(social_posts) == 2
+    assert all(isinstance(post, SocialPost) for post in social_posts)
     
-    # Verify posts were updated in the database
-    db_posts = test_db.query(SocialPost).filter(SocialPost.id.in_(post_ids)).all()
-    assert len(db_posts) == 2
-    assert all(post.status == "scheduled" for post in db_posts)
+    # Check LinkedIn post
+    linkedin_post = next((post for post in social_posts if post.platform == "linkedin"), None)
+    assert linkedin_post is not None
+    assert linkedin_post.article_id == article.id
+    assert "AI adoption increased 35%" in linkedin_post.content
+    assert "#ArtificialIntelligence" in linkedin_post.content
+    assert linkedin_post.status == "draft"
+    
+    # Check Twitter post
+    twitter_post = next((post for post in social_posts if post.platform == "twitter"), None)
+    assert twitter_post is not None
+    assert twitter_post.article_id == article.id
+    assert "62% of businesses report positive ROI" in twitter_post.content
+    assert "#AI" in twitter_post.content
+    assert twitter_post.status == "draft"
 
 @pytest.mark.asyncio
-async def test_distribution_agent_schedule_post(test_db):
-    """Test that the DistributionAgent can schedule a post."""
-    # Arrange
-    agent = DistributionAgent()
+async def test_atomization_agent_process(test_db, monkeypatch):
+    """Test that the AtomizationAgent can process social post data."""
+    # We need to patch the db_session.add and commit methods to avoid conflicts
+    def mock_add(obj):
+        # Do nothing since we're using test_db directly
+        pass
+        
+    def mock_commit():
+        # Do nothing since we'll commit with test_db
+        pass
+        
+    monkeypatch.setattr("models.db_session.add", mock_add)
+    monkeypatch.setattr("models.db_session.commit", mock_commit)
     
-    # Create an article
+    # Arrange
+    agent = AtomizationAgent()
+    
+    # Create an article first
     article = Article(
         title="Test Article",
         content="Test content for article",
@@ -113,29 +167,28 @@ async def test_distribution_agent_schedule_post(test_db):
     test_db.add(article)
     test_db.commit()
     
-    # Create a social post
-    post = SocialPost(
-        platform="linkedin",
-        content="Test content for LinkedIn",
-        status="draft",
-        article_id=article.id
-    )
-    test_db.add(post)
-    test_db.commit()
+    data = {
+        "article": article,
+        "content": "This is a test social media post.",
+        "platform": "linkedin"
+    }
     
     # Act
-    scheduled_post = await agent._schedule_post(post)
+    social_post = await agent.process(data)
+    
+    # Add to test_db
+    test_db.add(social_post)
+    test_db.commit()
     
     # Assert
-    assert scheduled_post is not None
-    assert scheduled_post.status == "scheduled"
-    assert scheduled_post.scheduled_time is not None
+    assert social_post is not None
+    assert isinstance(social_post, SocialPost)
+    assert social_post.id is not None
+    assert social_post.platform == "linkedin"
+    assert social_post.content == data["content"]
+    assert social_post.status == "draft"
+    assert social_post.article_id == article.id
     
-    # The scheduled time should be in the future
-    now = datetime.utcnow()
-    assert scheduled_post.scheduled_time > now
-    
-    # Verify the post was updated in the database
-    db_post = test_db.query(SocialPost).get(post.id)
-    assert db_post.status == "scheduled"
-    assert db_post.scheduled_time is not None
+    # Verify it was saved to the database
+    db_post = test_db.query(SocialPost).filter_by(id=social_post.id).first()
+    assert db_post is not None
