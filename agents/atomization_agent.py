@@ -12,6 +12,7 @@ class AtomizationAgent(BaseAgent):
         super().__init__("Atomization Agent", "Extracts content for social media")
         self.gemini_client = GeminiClient()
     
+    # agents/atomization_agent.py (update the run method)
     async def run(self, article_id, platforms=None):
         """Generate social media content for an article."""
         self.log_status(f"Starting content atomization for article: {article_id}")
@@ -20,7 +21,7 @@ class AtomizationAgent(BaseAgent):
             platforms = ["linkedin", "twitter", "medium", "substack"]
         
         # Retrieve the article
-        article = db_session.query(Article).get(article_id)
+        article = db_session.get(Article, article_id)
         if not article:
             raise ValueError(f"Article with ID {article_id} not found")
         

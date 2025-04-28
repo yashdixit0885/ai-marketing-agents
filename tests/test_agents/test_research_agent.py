@@ -1,98 +1,62 @@
+import pytest
 import json
-from agents.base_agent import BaseAgent
-from services.api_clients.gemini_client import GeminiClient
+from agents.research_agent import ResearchAgent
 from models.content_models import ResearchItem
 from models import db_session
 
-class ResearchAgent(BaseAgent):
-    """Agent responsible for conducting research on AI topics."""
+@pytest.mark.asyncio
+async def test_research_agent_initialization():
+    """Test that the ResearchAgent initializes correctly."""
+    agent = ResearchAgent()
+    assert agent.name == "Research Agent"
+    assert agent.description == "Conducts deep research on AI business applications"
+
+@pytest.mark.asyncio
+async def test_research_agent_run(test_db, mock_gemini_client, monkeypatch):
+    """Test that the ResearchAgent can conduct research."""
+    # Patch db_session to avoid conflicts
+    def mock_add(obj):
+        # Directly add to test_db instead
+        test_db.add(obj)
+        
+    def mock_commit():
+        # Commit with test_db instead
+        test_db.commit()
     
-    def __init__(self):
-        super().__init__("Research Agent", "Conducts deep research on AI business applications")
-        self.gemini_client = GeminiClient()
+    monkeypatch.setattr("models.db_session.add", mock_add)
+    monkeypatch.setattr("models.db_session.commit", mock_commit)
     
-    async def run(self, topic):
-        """Run research on the given topic."""
-        self.log_status(f"Starting research on topic: {topic}")
-        
-        # Get research plan from Gemini
-        research_plan = await self._create_research_plan(topic)
-        
-        # Collect data from various sources
-        data = await self._collect_data(topic, research_plan)
-        
-        # Process and store research results
-        processed_data = await self.process(data)
-        
-        self.log_status(f"Completed research on topic: {topic}")
-        return processed_data
+    # Arrange
+    agent = ResearchAgent()
+    topic = "AI business applications"
     
-    async def _create_research_plan(self, topic):
-        """Create a research plan using Gemini."""
-        prompt = f"""
-        Create a detailed research plan for gathering information about: {topic}
-        
-        The plan should include:
-        1. Key subtopics to explore
-        2. Specific questions to answer
-        3. Important data points to collect
-        4. Types of sources to prioritize
-        
-        Format the response as a JSON object.
-        """
-        
-        response = await self.gemini_client.generate_content(prompt)
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError as e:
-            self.log_status(f"Error parsing JSON: {e}")
-            self.log_status(f"Response received: {response[:500]}...")
-            # Return a default structured plan as fallback
-            return {
-                "key_subtopics": ["Basic information", "Recent developments", "Applications"],
-                "specific_questions": ["What is this topic about?", "What's new in this field?"],
-                "important_data_points": ["Key statistics", "Growth trends"],
-                "sources_to_prioritize": ["Academic papers", "Industry reports"]
-            }
+    # Act
+    research_item = await agent.run(topic)
     
-    async def _collect_data(self, topic, research_plan):
-        """Collect data from various sources based on the research plan."""
-        # This would connect to various APIs and data sources
-        # For now, we'll use Gemini to simulate data collection
-        
-        prompt = f"""
-        Based on this research plan:
-        {json.dumps(research_plan, indent=2)}
-        
-        Generate comprehensive research findings about: {topic}
-        
-        Include:
-        - Key insights from academic papers
-        - Recent industry developments
-        - Case studies and examples
-        - Expert opinions
-        - Statistics and data points
-        
-        Format the response as a detailed research report with sections.
-        """
-        
-        response = await self.gemini_client.generate_content(prompt)
-        return response
+    # Assert
+    assert research_item is not None
+    assert isinstance(research_item, ResearchItem)
+    assert research_item.id is not None
+    assert "Research on AI topic" in research_item.title
+    assert research_item.source == "Gemini Research Agent"
+    assert research_item.content is not None
     
-    async def process(self, data):
-        """Process and store the research data."""
-        # Extract key information and store in the database
-        # This is simplified; in reality you'd parse the data more thoroughly
-        
-        # Example: Create a research item in the database
-        research_item = ResearchItem(
-            title="Research on AI topic",
-            source="Gemini Research Agent",
-            content=data,
-            meta_data={"source_type": "ai_generated"}
-        )
-        
-        db_session.add(research_item)
-        db_session.commit()
-        
-        return research_item
+    # Verify it was saved to the database
+    db_research = test_db.query(ResearchItem).filter_by(id=research_item.id).first()
+    assert db_research is not None
+
+@pytest.mark.asyncio
+async def test_create_research_plan(mock_gemini_client):
+    """Test the creation of a research plan."""
+    agent = ResearchAgent()
+    topic = "AI in business"
+    
+    # Call the private method
+    research_plan = await agent._create_research_plan(topic)
+    
+    # Verify the structure
+    assert isinstance(research_plan, dict)
+    assert "key_subtopics" in research_plan
+    assert "specific_questions" in research_plan
+    assert "important_data_points" in research_plan
+    assert "sources_to_prioritize" in research_plan

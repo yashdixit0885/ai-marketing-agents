@@ -1,3 +1,4 @@
+# tests/test_agents/test_content_agent.py
 import pytest
 from agents.content_agent import ContentAgent
 from agents.research_agent import ResearchAgent
@@ -14,50 +15,40 @@ async def test_content_agent_initialization():
 @pytest.mark.asyncio
 async def test_content_agent_run(test_db, mock_gemini_client, monkeypatch):
     """Test that the ContentAgent can generate an article from research."""
-    # Monkey patch the ResearchAgent._collect_data method
-    async def mock_collect_data(self, topic, research_plan):
-        return """
-        # Research Findings on AI Business Applications
-        
-        ## Key Insights
-        - AI adoption increased 35% in enterprise businesses in 2024
-        - Natural Language Processing is the most widely adopted AI technology
-        - 62% of businesses report positive ROI from AI implementations
-        """
+    # Create a research item directly in the test database
+    research_item = ResearchItem(
+        title="Test Research",
+        source="Test Source",
+        content="Test content for research item"
+    )
+    test_db.add(research_item)
+    test_db.commit()
     
-    # Apply the monkeypatch
-    monkeypatch.setattr(ResearchAgent, "_collect_data", mock_collect_data)
+    # The content with properly formatted title on the first line
+    article_content = "# Transforming Business Operations with AI\n\nIn today's rapidly evolving technological landscape, artificial intelligence (AI) has emerged as a game-changer for businesses across industries..."
     
-    # Also monkey patch the _generate_article method
+    # Monkey patch the _generate_article method
     async def mock_generate_article(self, research_item):
-        return """
-        # Transforming Business Operations with AI
-        
-        In today's rapidly evolving technological landscape, artificial intelligence (AI) has emerged as a game-changer for businesses across industries...
-        """
+        return article_content
     
     # Apply the monkeypatch
     monkeypatch.setattr(ContentAgent, "_generate_article", mock_generate_article)
     
-    # First, create a research item
-    research_agent = ResearchAgent()
-    research_item = await research_agent.run("AI in business")
+    # Patch db_session to use our test_db
+    def mock_query(cls):
+        return test_db.query(cls)
     
-    # Patch db_session to avoid conflicts
     def mock_get(cls, id):
-        if cls == ResearchItem and id == research_item.id:
-            return research_item
-        return None
+        return test_db.get(cls, id)
     
-    monkeypatch.setattr("models.db_session.query", lambda cls: type('', (), {'get': lambda id: mock_get(cls, id)}))
-    
-    # Also patch db_session.add and commit
     def mock_add(obj):
-        pass
-        
-    def mock_commit():
-        pass
+        test_db.add(obj)
     
+    def mock_commit():
+        test_db.commit()
+    
+    monkeypatch.setattr("models.db_session.query", mock_query)
+    monkeypatch.setattr("models.db_session.get", mock_get)
     monkeypatch.setattr("models.db_session.add", mock_add)
     monkeypatch.setattr("models.db_session.commit", mock_commit)
     
@@ -67,18 +58,9 @@ async def test_content_agent_run(test_db, mock_gemini_client, monkeypatch):
     # Act
     article = await agent.run(research_item.id)
     
-    # Manually set the article ID for testing
-    article.id = 1
-    
-    # Add to test_db
-    test_db.add(article)
-    test_db.commit()
-    
     # Assert
     assert article is not None
-    assert isinstance(article, Article)
-    assert article.id is not None
-    assert "Transforming Business Operations with AI" in article.title
+    assert article.title == "Transforming Business Operations with AI"
     assert article.status == "draft"
     assert article.word_count > 0
     

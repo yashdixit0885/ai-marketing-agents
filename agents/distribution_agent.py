@@ -1,5 +1,7 @@
+# agents/distribution_agent.py
+
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from .base_agent import BaseAgent
 from models.content_models import Article, SocialPost
 from models import db_session
@@ -25,7 +27,7 @@ class DistributionAgent(BaseAgent):
                 await self._schedule_post(post)
             
             # Update article status
-            article = db_session.query(Article).get(article_id)
+            article = db_session.get(Article, article_id)
             if article:
                 article.status = "published"
                 db_session.commit()
@@ -38,7 +40,7 @@ class DistributionAgent(BaseAgent):
             
             posts = []
             for post_id in post_ids:
-                post = db_session.query(SocialPost).get(post_id)
+                post = db_session.get(SocialPost, post_id)
                 if post:
                     await self._schedule_post(post)
                     posts.append(post)
@@ -54,7 +56,8 @@ class DistributionAgent(BaseAgent):
         # Set scheduled time if not already set
         if not post.scheduled_time:
             # Schedule for the future (e.g., 1 hour from now)
-            post.scheduled_time = datetime.utcnow() + timedelta(hours=1)
+            # Use timezone.utc instead of datetime.UTC
+            post.scheduled_time = datetime.now(timezone.utc) + timedelta(hours=1)
         
         # Update post status
         post.status = "scheduled"

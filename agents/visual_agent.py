@@ -20,12 +20,13 @@ class VisualAgent(BaseAgent):
         # Create output directory if it doesn't exist
         os.makedirs("data/visuals", exist_ok=True)
     
+    # agents/visual_agent.py (update the run method)
     async def run(self, article_id, visual_type="chart"):
         """Generate visual content for an article."""
         self.log_status(f"Starting visual generation for article: {article_id}")
         
         # Retrieve the article
-        article = db_session.query(Article).get(article_id)
+        article = db_session.get(Article, article_id)
         if not article:
             raise ValueError(f"Article with ID {article_id} not found")
         

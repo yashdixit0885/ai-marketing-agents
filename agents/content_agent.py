@@ -10,12 +10,13 @@ class ContentAgent(BaseAgent):
         super().__init__("Content Agent", "Creates comprehensive articles based on research")
         self.gemini_client = GeminiClient()
     
+    # agents/content_agent.py (update the run method)
     async def run(self, research_item_id):
         """Generate an article based on the research item."""
         self.log_status(f"Starting article generation for research item: {research_item_id}")
         
         # Retrieve the research item
-        research_item = db_session.query(ResearchItem).get(research_item_id)
+        research_item = db_session.get(ResearchItem, research_item_id)
         if not research_item:
             raise ValueError(f"Research item with ID {research_item_id} not found")
         
