@@ -78,7 +78,7 @@ class ResearchAgent(BaseAgent):
             title="Research on AI topic",
             source="Gemini Research Agent",
             content=data,
-            metadata={"source_type": "ai_generated"}
+            meta_data={"source_type": "ai_generated"}
         )
         
         db_session.add(research_item)

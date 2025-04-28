@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, Integer, ForeignKey, Enum, Boolean, JSON
+from sqlalchemy import Column, String, Text, Integer, ForeignKey, Enum, Boolean, JSON, DateTime
 from sqlalchemy.orm import relationship
 from .base import BaseModel
 
@@ -8,7 +8,7 @@ class ResearchItem(BaseModel):
     title = Column(String(255), nullable=False)
     source = Column(String(255), nullable=False)
     content = Column(Text, nullable=False)
-    metadata = Column(JSON, nullable=True)
+    meta_data = Column(JSON, nullable=True)
     
     # Relationships
     article_id = Column(Integer, ForeignKey("articles.id"), nullable=True)
