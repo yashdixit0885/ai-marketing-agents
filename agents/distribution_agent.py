@@ -19,6 +19,16 @@ class DistributionAgent(BaseAgent):
         if article_id:
             self.log_status(f"Starting distribution for article: {article_id}")
             
+            # Get the article
+            article = db_session.get(Article, article_id)
+            if not article:
+                raise ValueError(f"Article with ID {article_id} not found")
+            
+            # Check if the article is approved
+            if article.review_status != "approved":
+                self.log_status(f"Cannot distribute article {article_id}: not approved (status: {article.review_status})")
+                return {"status": "skipped", "reason": f"Article not approved (status: {article.review_status})"}
+            
             # Get all social posts for this article
             posts = db_session.query(SocialPost).filter(SocialPost.article_id == article_id).all()
             
@@ -27,10 +37,8 @@ class DistributionAgent(BaseAgent):
                 await self._schedule_post(post)
             
             # Update article status
-            article = db_session.get(Article, article_id)
-            if article:
-                article.status = "published"
-                db_session.commit()
+            article.status = "published"
+            db_session.commit()
                 
             self.log_status(f"Completed distribution for article: {article_id}")
             return posts
@@ -42,8 +50,13 @@ class DistributionAgent(BaseAgent):
             for post_id in post_ids:
                 post = db_session.get(SocialPost, post_id)
                 if post:
-                    await self._schedule_post(post)
-                    posts.append(post)
+                    # Check if the associated article is approved
+                    article = db_session.get(Article, post.article_id)
+                    if article and article.review_status == "approved":
+                        await self._schedule_post(post)
+                        posts.append(post)
+                    else:
+                        self.log_status(f"Skipping post {post_id}: article not approved")
             
             self.log_status(f"Completed distribution for specific posts")
             return posts
@@ -56,7 +69,6 @@ class DistributionAgent(BaseAgent):
         # Set scheduled time if not already set
         if not post.scheduled_time:
             # Schedule for the future (e.g., 1 hour from now)
-            # Use timezone.utc instead of datetime.UTC
             post.scheduled_time = datetime.now(timezone.utc) + timedelta(hours=1)
         
         # Update post status

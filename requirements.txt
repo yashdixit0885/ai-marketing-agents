@@ -44,4 +44,10 @@ python-dateutil
 pytz
 loguru
 
-medium-sdk
+# medium-sdk
+
+# Add these to requirements.txt
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client

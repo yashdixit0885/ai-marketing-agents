@@ -1,3 +1,5 @@
+# tools/pipeline_runner.py (updating the existing file)
+
 #!/usr/bin/env python3
 """
 Pipeline Runner
@@ -24,8 +26,10 @@ from agents.content_agent import ContentAgent
 from agents.visual_agent import VisualAgent
 from agents.atomization_agent import AtomizationAgent
 from agents.distribution_agent import DistributionAgent
+from agents.export_agent import ExportAgent  # New import
 from models import init_db, db_session
 from models.content_models import Article, ResearchItem, SocialPost, Visual
+from services.review_handler import ReviewHandler  # New import
 
 # Configure logging
 logging.basicConfig(
@@ -43,9 +47,11 @@ class PipelineRunner:
         self.content_agent = ContentAgent()
         self.visual_agent = VisualAgent()
         self.atomization_agent = AtomizationAgent()
+        self.export_agent = ExportAgent()  # New agent
         self.distribution_agent = DistributionAgent()
+        self.review_handler = ReviewHandler()  # New handler
     
-    async def run_full_pipeline(self, topic: str, platforms: List[str] = None, visual_types: List[str] = None) -> dict:
+    async def run_full_pipeline(self, topic: str, platforms: List[str] = None, visual_types: List[str] = None, reviewer_email: Optional[str] = None) -> dict:
         """Run the entire content generation pipeline."""
         if platforms is None:
             platforms = ["linkedin", "twitter"]
@@ -83,19 +89,18 @@ class PipelineRunner:
         for post in social_posts:
             logger.info(f"Social post created for {post.platform}: {post.id}")
         
-        # Step 5: Distribution
-        logger.info("=== STEP 5: DISTRIBUTION ===")
-        logger.info(f"Scheduling distribution for article: {article.id}")
-        scheduled_posts = await self.distribution_agent.run(article_id=article.id)
-        
-        for post in scheduled_posts:
-            logger.info(f"Post {post.id} scheduled for {post.platform} at {post.scheduled_time}")
+        # Step 5: Export for review
+        logger.info("=== STEP 5: EXPORT FOR REVIEW ===")
+        logger.info(f"Exporting article for review: {article.id}")
+        export = await self.export_agent.run(article.id, reviewer_email)
+        logger.info(f"Article exported: {export.id} - {export.doc_url}")
         
         # Calculate elapsed time
         end_time = datetime.now()
         duration = end_time - start_time
         
-        logger.info(f"Full pipeline completed in {duration}")
+        logger.info(f"Pipeline completed up to review in {duration}")
+        logger.info(f"The article is now ready for review. Please review it at: {export.doc_url}")
         
         # Return the results
         return {
@@ -103,10 +108,11 @@ class PipelineRunner:
             "article": article,
             "visuals": visuals,
             "social_posts": social_posts,
+            "export": export,
             "elapsed_time": duration
         }
     
-    async def run_partial_pipeline(self, start_point: str, item_id: int, platforms: List[str] = None, visual_types: List[str] = None) -> dict:
+    async def run_partial_pipeline(self, start_point: str, item_id: int, platforms: List[str] = None, visual_types: List[str] = None, reviewer_email: Optional[str] = None) -> dict:
         """Run a portion of the pipeline starting from a specific point."""
         if platforms is None:
             platforms = ["linkedin", "twitter"]
@@ -122,42 +128,77 @@ class PipelineRunner:
             article = await self.content_agent.run(item_id)
             results["article"] = article
             
-            # Continue with visuals, atomization, and distribution
-            # ...similar to full pipeline
+            # Continue with visuals, atomization, and export
+            # ... (similar to full pipeline)
         
         elif start_point == "visual":
             # Start from visual creation
             logger.info(f"Starting pipeline from visual creation for article: {item_id}")
-            article = db_session.query(Article).get(item_id)
+            article = db_session.get(Article, item_id)
             if not article:
                 raise ValueError(f"Article with ID {item_id} not found")
             
             results["article"] = article
             
-            # Continue with visuals, atomization, and distribution
-            # ...similar to full pipeline
+            # Continue with visuals, atomization, and export
+            # ... (similar to full pipeline)
         
         elif start_point == "atomization":
             # Start from atomization
             logger.info(f"Starting pipeline from atomization for article: {item_id}")
-            article = db_session.query(Article).get(item_id)
+            article = db_session.get(Article, item_id)
             if not article:
                 raise ValueError(f"Article with ID {item_id} not found")
             
             results["article"] = article
             
-            # Continue with atomization and distribution
-            # ...similar to full pipeline
+            # Continue with atomization and export
+            # ... (similar to full pipeline)
+        
+        elif start_point == "export":
+            # Start from export
+            logger.info(f"Starting pipeline from export for article: {item_id}")
+            article = db_session.get(Article, item_id)
+            if not article:
+                raise ValueError(f"Article with ID {item_id} not found")
+            
+            results["article"] = article
+            export = await self.export_agent.run(article.id, reviewer_email)
+            results["export"] = export
         
         elif start_point == "distribution":
             # Start from distribution
             logger.info(f"Starting pipeline from distribution for article: {item_id}")
-            results["scheduled_posts"] = await self.distribution_agent.run(article_id=item_id)
+            
+            # Check if article is approved
+            article = db_session.get(Article, item_id)
+            if not article:
+                raise ValueError(f"Article with ID {item_id} not found")
+            
+            if article.review_status != "approved":
+                logger.warning(f"Article {item_id} is not approved (status: {article.review_status})")
+                results["warning"] = f"Article is not approved (status: {article.review_status})"
+            else:
+                results["scheduled_posts"] = await self.distribution_agent.run(article_id=item_id)
         
         else:
             raise ValueError(f"Unknown start point: {start_point}")
         
         return results
+    
+    async def process_review(self, export_id: int, status: str, comments: str, reviewer_name: str) -> dict:
+        """Process a review."""
+        logger.info(f"Processing review for export: {export_id}")
+        
+        result = await self.review_handler.process_review(
+            export_id,
+            status,
+            comments,
+            reviewer_name
+        )
+        
+        logger.info(f"Review processed: {result}")
+        return result
     
     def display_results(self, results: dict) -> None:
         """Display the results of the pipeline run."""
@@ -167,6 +208,7 @@ class PipelineRunner:
             print(f"Title: {article.title}")
             print(f"Word count: {article.word_count}")
             print(f"Status: {article.status}")
+            print(f"Review status: {article.review_status}")
             print("\nContent preview:")
             print(article.content[:500] + "...")
         
@@ -186,6 +228,17 @@ class PipelineRunner:
                 print(f"Status: {post.status}")
                 if post.scheduled_time:
                     print(f"Scheduled for: {post.scheduled_time}")
+        
+        export = results.get("export")
+        if export:
+            print("\n=== EXPORT ===")
+            print(f"Doc URL: {export.doc_url}")
+            print(f"Status: {export.status}")
+            print(f"Export date: {export.export_date}")
+        
+        warning = results.get("warning")
+        if warning:
+            print(f"\n⚠️ WARNING: {warning}")
 
 def parse_arguments():
     """Parse command-line arguments."""
@@ -193,7 +246,7 @@ def parse_arguments():
     
     parser.add_argument("--topic", type=str, help="Research topic for content generation")
     
-    parser.add_argument("--start-point", type=str, choices=["research", "content", "visual", "atomization", "distribution"],
+    parser.add_argument("--start-point", type=str, choices=["research", "content", "visual", "atomization", "export", "distribution"],
                       default="research", help="Starting point in the pipeline")
     
     parser.add_argument("--item-id", type=int, help="ID of the research item or article to start from")
@@ -203,6 +256,15 @@ def parse_arguments():
     
     parser.add_argument("--visual-types", type=str, nargs="+", choices=["chart", "infographic", "quote_card"],
                       default=["chart", "quote_card"], help="Types of visuals to generate")
+    
+    parser.add_argument("--reviewer-email", type=str, help="Email address of the reviewer to share with")
+    
+    # New arguments for review processing
+    parser.add_argument("--process-review", action="store_true", help="Process a review decision")
+    parser.add_argument("--export-id", type=int, help="ID of the export to review")
+    parser.add_argument("--review-status", type=str, choices=["approved", "rejected", "needs_revision"], help="Review decision")
+    parser.add_argument("--comments", type=str, default="", help="Review comments")
+    parser.add_argument("--reviewer", type=str, help="Name of the reviewer")
     
     return parser.parse_args()
 
@@ -215,12 +277,28 @@ async def main():
     
     runner = PipelineRunner()
     
+    if args.process_review:
+        # Process a review
+        if not all([args.export_id, args.review_status, args.reviewer]):
+            print("Error: To process a review, you must provide --export-id, --review-status, and --reviewer")
+            return
+        
+        result = await runner.process_review(
+            args.export_id,
+            args.review_status,
+            args.comments,
+            args.reviewer
+        )
+        
+        print(f"Review processed: {result}")
+        return
+    
     if args.start_point == "research" and args.topic:
         # Run full pipeline
-        results = await runner.run_full_pipeline(args.topic, args.platforms, args.visual_types)
+        results = await runner.run_full_pipeline(args.topic, args.platforms, args.visual_types, args.reviewer_email)
     elif args.item_id:
         # Run partial pipeline
-        results = await runner.run_partial_pipeline(args.start_point, args.item_id, args.platforms, args.visual_types)
+        results = await runner.run_partial_pipeline(args.start_point, args.item_id, args.platforms, args.visual_types, args.reviewer_email)
     else:
         print("Error: You must provide either a topic (for full pipeline) or an item ID (for partial pipeline)")
         return
