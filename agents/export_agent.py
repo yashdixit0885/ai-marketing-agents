@@ -56,7 +56,7 @@ class ExportAgent(BaseAgent):
             self.log_status(f"Found existing document: {doc_name}")
         
         # Write article content to the doc (replacing existing content)
-        await self.docs_client.write_content(doc_id, article.content)
+        self.docs_client.write_content(doc_id, article.content)
         
         # Create or find a doc for social posts
         social_posts = db_session.query(SocialPost).filter(SocialPost.article_id == article.id).all()
@@ -91,7 +91,7 @@ class ExportAgent(BaseAgent):
                 social_content += "---\n\n"
             
             # Write social content to the doc (replacing existing content)
-            await self.docs_client.write_content(social_doc_id, social_content)
+            self.docs_client.write_content(social_doc_id, social_content)
         
         # Upload visual files to Google Drive if they exist
         visuals_data = []
@@ -107,10 +107,11 @@ class ExportAgent(BaseAgent):
                         # Use existing file
                         file_id = existing_files[0].get('id')
                         file_url = existing_files[0].get('webViewLink')
+                        web_content_link = existing_files[0].get('webContentLink')
                         self.log_status(f"Found existing visual file: {visual_name}")
                     else:
                         # Upload the file to Google Drive
-                        file_id, file_url = await self.drive_client.upload_file(
+                        file_id, file_url, web_content_link = await self.drive_client.upload_file(
                             visual.file_path, 
                             visual_name, 
                             folder_id
@@ -121,6 +122,7 @@ class ExportAgent(BaseAgent):
                     visuals_data.append({
                         'file_id': file_id,
                         'file_url': file_url,
+                        'web_content_link': web_content_link,
                         'title': visual.title,
                         'type': visual.type
                     })

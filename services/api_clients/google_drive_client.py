@@ -110,11 +110,23 @@ class GoogleDriveClient:
             file = self.service.files().create(
                 body=file_metadata,
                 media_body=media,
-                fields='id, webViewLink'
+                fields='id, webViewLink, webContentLink'
+            ).execute()
+            
+            # Set file to be publicly accessible for embedding
+            permission = {
+                'type': 'anyone',
+                'role': 'reader'
+            }
+            
+            self.service.permissions().create(
+                fileId=file.get('id'),
+                body=permission,
+                fields='id'
             ).execute()
             
             logger.info(f"Uploaded file: {name} with ID: {file.get('id')}")
-            return file.get('id'), file.get('webViewLink')
+            return file.get('id'), file.get('webViewLink'), file.get('webContentLink')
         except Exception as e:
             logger.error(f"Failed to upload file {name}: {str(e)}")
             raise
@@ -129,7 +141,7 @@ class GoogleDriveClient:
             results = self.service.files().list(
                 q=q,
                 spaces='drive',
-                fields='files(id, name, webViewLink)'
+                fields='files(id, name, webViewLink, webContentLink)'
             ).execute()
             
             return results.get('files', [])
