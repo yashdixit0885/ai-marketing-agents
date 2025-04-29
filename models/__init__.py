@@ -12,9 +12,19 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 def init_db():
-    # Import all models
-    from .content_models import Article, ResearchItem, SocialPost, Visual
+    """Initialize the database and create all tables."""
+    # Import all models here to avoid circular imports
+    # This ensures all models are loaded before table creation
+    from .content_models import ResearchItem, Article, SocialPost, Visual, ArticleExport
     from .analytics_models import ContentPerformance
+    
+    # Import relationships to ensure they are registered
+    from .content_models import (
+        ResearchItem, Article, SocialPost, Visual, ArticleExport,
+        ContentType, ContentTone, VisualType
+    )
     
     # Create tables
     Base.metadata.create_all(bind=engine)
+    
+    return True

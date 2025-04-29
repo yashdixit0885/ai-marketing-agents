@@ -19,6 +19,28 @@ def slugify(text: str) -> str:
     
     return text
 
+def clean_text(text: str) -> str:
+    """Clean text for use in APIs and documents."""
+    if not text:
+        return ""
+    
+    # Remove excessive whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove trailing/leading whitespace
+    text = text.strip()
+    
+    # Replace problematic characters
+    text = text.replace('\0', '')
+    
+    # Normalize newlines to single \n
+    text = re.sub(r'\r\n|\r', '\n', text)
+    
+    # Remove excessive newlines (more than 2 in a row)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text
+
 def format_datetime(dt: datetime.datetime, format_str: str = "%Y-%m-%d %H:%M:%S") -> str:
     """Format a datetime object to a string."""
     return dt.strftime(format_str)
