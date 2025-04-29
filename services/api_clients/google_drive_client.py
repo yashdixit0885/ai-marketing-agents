@@ -88,3 +88,69 @@ class GoogleDriveClient:
         except Exception as e:
             logger.error(f"Failed to share file {file_id} with {email}: {str(e)}")
             raise
+    
+    async def upload_file(self, file_path, name, folder_id=None):
+        """Upload a file to Google Drive."""
+        try:
+            from googleapiclient.http import MediaFileUpload
+            
+            file_metadata = {
+                'name': name,
+            }
+            
+            if folder_id:
+                file_metadata['parents'] = [folder_id]
+            
+            media = MediaFileUpload(
+                file_path,
+                mimetype='application/octet-stream',
+                resumable=True
+            )
+            
+            file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, webViewLink'
+            ).execute()
+            
+            logger.info(f"Uploaded file: {name} with ID: {file.get('id')}")
+            return file.get('id'), file.get('webViewLink')
+        except Exception as e:
+            logger.error(f"Failed to upload file {name}: {str(e)}")
+            raise
+        
+    async def search_files(self, query, folder_id=None):
+        """Search for files in Google Drive."""
+        try:
+            q = query
+            if folder_id:
+                q = f"{q} and '{folder_id}' in parents"
+                
+            results = self.service.files().list(
+                q=q,
+                spaces='drive',
+                fields='files(id, name, webViewLink)'
+            ).execute()
+            
+            return results.get('files', [])
+        except Exception as e:
+            logger.error(f"Failed to search files: {str(e)}")
+            raise
+
+    async def find_folder_by_name(self, name, parent_id=None):
+        """Find a folder by name."""
+        query = f"mimeType='application/vnd.google-apps.folder' and name='{name}'"
+        files = await self.search_files(query, parent_id)
+        
+        if files:
+            return files[0].get('id'), files[0].get('webViewLink')
+        return None, None
+
+    async def find_doc_by_name(self, name, folder_id=None):
+        """Find a document by name."""
+        query = f"mimeType='application/vnd.google-apps.document' and name='{name}'"
+        files = await self.search_files(query, folder_id)
+        
+        if files:
+            return files[0].get('id'), files[0].get('webViewLink')
+        return None, None
