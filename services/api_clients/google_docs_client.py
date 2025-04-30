@@ -16,7 +16,7 @@ import asyncio
 import base64
 from datetime import datetime
 
-from models.content_models import Article, Visual
+from models.content_models import Article, Visual # Ensure Visual is imported
 from utils.helpers import clean_text
 
 logger = logging.getLogger(__name__)
@@ -724,8 +724,9 @@ class GoogleDocsClient:
             # Use the existing docs_service instance instead of creating a new one
             service = self.docs_service
             
-            # Ensure image URL is formatted correctly for Google Docs
-            image_url = f'https://drive.google.com/uc?id={image_id}'
+            # Ensure image URL is formatted correctly for Google Docs using thumbnail URL
+            # This format is more reliable for embedding Drive images
+            image_url = f'https://drive.google.com/thumbnail?id={image_id}&sz=w1000'
             logger.info(f"Using image URL: {image_url}")
             
             # Create a request to insert the image
@@ -741,7 +742,7 @@ class GoogleDocsClient:
                             'unit': 'PT'
                         },
                         'height': {
-                            'magnitude': 350,
+                            'magnitude': 0,  # Set height to 0 to maintain aspect ratio
                             'unit': 'PT'
                         }
                     }
@@ -823,8 +824,7 @@ class GoogleDocsClient:
             return False
             
     async def _insert_caption(self, document_id: str, caption: str, position: int) -> None:
-        """
-        Insert a formatted caption at the specified position.
+        """Insert a formatted caption at the specified position.
         
         Args:
             document_id: The document ID
@@ -891,91 +891,53 @@ class GoogleDocsClient:
             Document metadata including ID
         """
         try:
-            # Create new document
-            doc_id = self.create_document(article.title)
-            
+            if not article:
+                logger.error("No article provided for document creation")
+                return {}
+
+            # Create the document with title
+            timestamp = datetime.now().strftime("%Y-%m-%d")
+            title = f"[DRAFT] {article.title} - {timestamp}"
+            doc_id = self.create_document(title)
             if not doc_id:
-                logger.error("Failed to create document")
-                return {"documentId": None}
-                
-            # Write the main article content first
-            content_written = self.write_content(doc_id, article.content)
-            if not content_written:
-                logger.error("Failed to write content to document")
-                return {"documentId": doc_id}  # Return ID even if content writing failed
-                
-            # If we have visuals, try to insert them
-            if visuals and len(visuals) > 0:
-                try:
-                    logger.info(f"Inserting {len(visuals)} visuals into document {doc_id}")
-                    # Insert header image first if present
-                    header_images = [v for v in visuals if v.type == 'header_image']
-                    if header_images:
-                        # Insert at the beginning of the document
-                        for visual in header_images:
-                            # The Visual model stores the Google Drive file ID in file_path
-                            placement_successful = await self.insert_image(
-                                document_id=doc_id, 
-                                image_id=visual.file_path,
-                                position=1  # Top of document
-                            )
-                            if placement_successful:
-                                logger.info(f"Inserted header image {visual.title} at beginning of document")
-                            else:
-                                logger.warning(f"Failed to insert header image {visual.title}")
-                    
-                    # Insert remaining visuals distributed throughout the document
-                    other_visuals = [v for v in visuals if v.type != 'header_image']
-                    if other_visuals:
-                        # Get document to find appropriate positions
-                        document = self.docs_service.documents().get(documentId=doc_id).execute()
-                        content = document.get('body', {}).get('content', [])
-                        
-                        if content:
-                            doc_length = content[-1].get('endIndex', 1)
-                            
-                            # Calculate positions to distribute visuals evenly
-                            num_visuals = len(other_visuals)
-                            
-                            # Start after the first 15% of content
-                            start_pos = max(int(doc_length * 0.15), 1)
-                            
-                            # Distribute throughout the remaining 75% of the document
-                            remaining_space = int(doc_length * 0.75)
-                            
-                            if num_visuals == 1:
-                                # Single visual goes at 1/3 point
-                                positions = [start_pos + int(remaining_space * 0.33)]
-                            else:
-                                # Multiple visuals distributed evenly
-                                positions = []
-                                for i in range(num_visuals):
-                                    pos = start_pos + int((i + 1) * remaining_space / (num_visuals + 1))
-                                    positions.append(pos)
-                                
-                            # Insert visuals at calculated positions
-                            for i, visual in enumerate(other_visuals):
-                                if i < len(positions):
-                                    placement_successful = await self.insert_image(
-                                        document_id=doc_id,
-                                        image_id=visual.file_path,
-                                        position=positions[i]
-                                    )
-                                    if placement_successful:
-                                        logger.info(f"Inserted {visual.type} visual {visual.title} at position {positions[i]}")
-                                    else:
-                                        logger.warning(f"Failed to insert {visual.type} visual {visual.title}")
-                                        
-                except Exception as e:
-                    logger.error(f"Error placing visuals in document: {str(e)}")
-                    # Continue with document creation even if visual placement fails
+                logger.error("Failed to create Google Doc")
+                return {}
             
-            logger.info(f"Professional document created with ID: {doc_id}")
-            return {"documentId": doc_id, "title": article.title}
+            logger.info(f"Created Google Doc with ID: {doc_id} for article: {article.title}")
+
+            # Write the main article content
+            # Assuming article.content is markdown or plain text
+            # The write_content method handles basic formatting and writing
+            write_success = self.write_content(doc_id, article.content)
+            if not write_success:
+                logger.warning(f"Failed to write main content to doc {doc_id}")
+                # Continue to try inserting visuals anyway
+
+            # Insert visuals if provided
+            if visuals:
+                logger.info(f"Attempting to insert {len(visuals)} visuals into doc {doc_id}")
+                # Use place_visuals_in_document for intelligent placement
+                placement_success = await self.place_visuals_in_document(
+                    document_id=doc_id,
+                    article=article, # Pass article for context if needed by placement logic
+                    visuals=visuals
+                )
+                if placement_success:
+                    logger.info(f"Successfully placed visuals in doc {doc_id}")
+                else:
+                    logger.warning(f"Failed to place visuals in doc {doc_id}")
+            else:
+                logger.info(f"No visuals provided for doc {doc_id}")
+
+            # Retrieve final document metadata (optional, but good practice)
+            final_doc = self.docs_service.documents().get(documentId=doc_id).execute()
+            
+            logger.info(f"Successfully created professional document: {doc_id}")
+            return final_doc # Return the full document resource
             
         except Exception as e:
-            logger.error(f"Failed to create professional document: {str(e)}")
-            return {"documentId": None}
+            logger.error(f"Error creating professional document: {str(e)}", exc_info=True)
+            return {}
     
     def _parse_content_into_sections(self, content: str) -> list:
         """Parse content into sections with type identification."""
@@ -1209,19 +1171,17 @@ class GoogleDocsClient:
         """
         # Check if we need to create a public URL from a Drive ID
         if file_path and not file_path.startswith('http'):
-            # For this simplified version, we'll just return a drive viewer URL
-            # In a real app, you would use the Drive API to get or create a public URL
-            return f"https://drive.google.com/uc?id={file_path}"
+            # Use thumbnail URL which is more reliable for embedding in Google Docs
+            return f"https://drive.google.com/thumbnail?id={file_path}&sz=w1000"
         
         return file_path or ""
     
-    async def get_document(self, document_id: str) -> Dict[str, Any]:
-        """
-        Get a Google Doc by ID.
-        
+    async def get_document(self, document_id: str) -> Dict:
+        """Get a Google Doc by ID.
+
         Args:
             document_id: The ID of the document to retrieve
-            
+
         Returns:
             The document data
         """
@@ -1243,16 +1203,14 @@ class GoogleDocsClient:
             logger.error(f"Error retrieving document: {str(e)}")
             return {}
 
-    async def place_visuals_in_document(self, document_id: str, article: Article, 
-                                   visuals: List[Visual]) -> bool:
-        """
-        Intelligently place visuals throughout a document based on their placement attribute.
-        
+    async def place_visuals_in_document(self, document_id: str, article: Article, visuals: List[Visual]) -> bool:
+        """Intelligently place visuals throughout a document based on their placement attribute.
+
         Args:
             document_id: The ID of the document
             article: The article object
             visuals: List of Visual objects to place in the document
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -1277,7 +1235,8 @@ class GoogleDocsClient:
             # Group visuals by their placement
             visual_groups = {}
             for visual in visuals:
-                placement = visual.placement if hasattr(visual, 'placement') else "body"
+                # Safely get placement, default to 'body' if attribute missing or None
+                placement = getattr(visual, 'placement', 'body') or 'body' 
                 if placement not in visual_groups:
                     visual_groups[placement] = []
                 visual_groups[placement].append(visual)
@@ -1288,8 +1247,8 @@ class GoogleDocsClient:
                     # Header images go at the very top
                     await self.insert_image_with_caption(
                         document_id=document_id,
-                        image_id=visual.file_id,
-                        caption=visual.description,
+                        image_id=visual.file_path, # Use file_path for Drive ID
+                        caption=getattr(visual, 'description', visual.title), # Use description or title
                         position=1  # Start of document after title
                     )
                     logger.info(f"Placed header image {visual.title} at document start")
@@ -1298,47 +1257,52 @@ class GoogleDocsClient:
             for section, position in section_positions.items():
                 if section in visual_groups:
                     for visual in visual_groups[section]:
+                        # Skip header images as they are already placed
+                        if getattr(visual, 'placement', 'body') == 'header':
+                            continue
                         # Place visual at the end of its designated section
                         await self.insert_image_with_caption(
                             document_id=document_id,
-                            image_id=visual.file_id,
-                            caption=visual.description,
+                            image_id=visual.file_path, # Use file_path for Drive ID
+                            caption=getattr(visual, 'description', visual.title),
                             position=position
                         )
-                        logger.info(f"Placed {visual.type} visual in section '{section}'")
+                        logger.info(f"Placed {visual.type} visual '{visual.title}' in section '{section}'")
             
-            # Place any remaining visuals in the body
+            # Place any remaining visuals explicitly marked or defaulted as 'body'
             if "body" in visual_groups:
-                # Distribute body visuals throughout the document at sensible intervals
-                body_positions = await self._calculate_body_positions(document, len(visual_groups["body"]))
+                # Filter out any visuals that might have been placed by section matching already
+                body_visuals_to_place = [v for v in visual_groups["body"] if getattr(v, 'placement', 'body') == 'body']
                 
-                for i, visual in enumerate(visual_groups["body"]):
-                    if i < len(body_positions):
-                        position = body_positions[i]
-                        await self.insert_image_with_caption(
-                            document_id=document_id,
-                            image_id=visual.file_id,
-                            caption=visual.description,
-                            position=position
-                        )
-                        logger.info(f"Placed {visual.type} visual in document body position {i+1}/{len(body_positions)}")
+                if body_visuals_to_place:
+                    # Distribute body visuals throughout the document at sensible intervals
+                    body_positions = await self._calculate_body_positions(document, len(body_visuals_to_place))
+                    
+                    for i, visual in enumerate(body_visuals_to_place):
+                        if i < len(body_positions):
+                            position = body_positions[i]
+                            await self.insert_image_with_caption(
+                                document_id=document_id,
+                                image_id=visual.file_path, # Use file_path for Drive ID
+                                caption=getattr(visual, 'description', visual.title),
+                                position=position
+                            )
+                            logger.info(f"Placed {visual.type} visual '{visual.title}' in document body position {i+1}/{len(body_positions)}")
             
-            logger.info(f"Successfully placed {len(visuals)} visuals in document {document_id}")
+            logger.info(f"Successfully attempted to place {len(visuals)} visuals in document {document_id}")
             return True
             
         except Exception as e:
-            logger.error(f"Error placing visuals in document: {str(e)}")
+            logger.error(f"Error placing visuals in document: {str(e)}", exc_info=True) # Add exc_info for traceback
             return False
     
-    async def _identify_section_positions(self, document: Dict[str, Any], 
-                                     article: Article) -> Dict[str, int]:
-        """
-        Identify the end position of each section in the document.
-        
+    async def _identify_section_positions(self, document: Dict[str, Any], article: Article) -> Dict[str, int]:
+        """Identify the end position of each section in the document.
+
         Args:
             document: The document resource
             article: The article object
-            
+
         Returns:
             Dictionary mapping section names to end positions
         """
@@ -1422,15 +1386,13 @@ class GoogleDocsClient:
             logger.error(f"Error identifying section positions: {str(e)}")
             return {"body": document.get('body', {}).get('content', [])[-1].get('endIndex', 1)}
     
-    async def _calculate_body_positions(self, document: Dict[str, Any], 
-                                   num_visuals: int) -> List[int]:
-        """
-        Calculate appropriate positions to place visuals in the document body.
-        
+    async def _calculate_body_positions(self, document: Dict[str, Any], num_visuals: int) -> List[int]:
+        """Calculate appropriate positions to place visuals in the document body.
+
         Args:
             document: The document resource
             num_visuals: Number of visuals to place
-            
+
         Returns:
             List of position indices for placing visuals
         """
@@ -1468,14 +1430,14 @@ class GoogleDocsClient:
             logger.error(f"Error calculating body positions: {str(e)}")
             return positions
     
-    def share_document(self, doc_id: str, email: str, role: str = 'reader') -> bool:
+    def share_document(self, doc_id: str, email: str, role: str = 'writer') -> bool:
         """Share a document with a specific user.
-        
+
         Args:
             doc_id (str): The ID of the document to share
             email (str): The email address of the user to share with
             role (str): The role to grant (reader, writer, commenter)
-            
+
         Returns:
             bool: True if successful, False otherwise
         """
@@ -1516,7 +1478,7 @@ class GoogleDocsClient:
         
     async def _get_credentials(self):
         """Get credentials for API calls.
-        
+
         Returns:
             The credentials object
         """
@@ -1531,3 +1493,90 @@ class GoogleDocsClient:
                 credentials_file,
                 scopes=['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive']
             )
+
+    def _get_sharing_link(self, file_id: str) -> str:
+        """Get a shareable link for a file in Google Drive."""
+        # In a real implementation, this would get a sharing URL from Google Drive.
+        # For now, we'll assume file_path is already a public URL or Drive ID.
+        # This is a placeholder.
+        return f"https://docs.google.com/document/d/{file_id}/edit" # Placeholder link
+
+    def _parse_content_sections(self, content: str) -> List[Dict[str, Any]]:
+        """Parse content into sections with type identification."""
+        sections = []
+        lines = content.split('\n')
+        
+        current_section = {'type': 'paragraph', 'content': '', 'visual_opportunity': False}
+        section_count = 0
+        
+        for line in lines:
+            # Check for headings
+            if line.startswith('# '):
+                # If the current section has content, add it to sections
+                if current_section['content'].strip():
+                    # Enable visual opportunity for longer paragraphs
+                    if current_section['type'] == 'paragraph' and len(current_section['content']) > 100:
+                        current_section['visual_opportunity'] = True
+                    sections.append(current_section)
+                
+                # Start a new heading1 section
+                current_section = {
+                    'type': 'heading1',
+                    'content': line[2:],  # Remove the '# ' prefix
+                    'visual_opportunity': False  # Don't put visuals right after headings
+                }
+                sections.append(current_section)
+                current_section = {'type': 'paragraph', 'content': '', 'visual_opportunity': False}
+                section_count += 1
+                
+            elif line.startswith('## '):
+                # If the current section has content, add it to sections
+                if current_section['content'].strip():
+                    # Enable visual opportunity for longer paragraphs
+                    if current_section['type'] == 'paragraph' and len(current_section['content']) > 100:
+                        current_section['visual_opportunity'] = True
+                    sections.append(current_section)
+                
+                # Start a new heading2 section
+                current_section = {
+                    'type': 'heading2',
+                    'content': line[3:],  # Remove the '## ' prefix
+                    'visual_opportunity': False  # Don't put visuals right after headings
+                }
+                sections.append(current_section)
+                current_section = {'type': 'paragraph', 'content': '', 'visual_opportunity': False}
+                section_count += 1
+                
+            # Check for empty lines (paragraph breaks)
+            elif not line.strip() and current_section['content'].strip():
+                # Enable visual opportunity for longer paragraphs
+                if current_section['type'] == 'paragraph' and len(current_section['content']) > 100:
+                    current_section['visual_opportunity'] = True
+                sections.append(current_section)
+                current_section = {'type': 'paragraph', 'content': '', 'visual_opportunity': False}
+                
+            # Add to current section
+            else:
+                if current_section['content'] and not current_section['content'].endswith('\n'):
+                    current_section['content'] += '\n'
+                current_section['content'] += line
+        
+        # Add the last section if it has content
+        if current_section['content'].strip():
+            # Enable visual opportunity for longer paragraphs
+            if current_section['type'] == 'paragraph' and len(current_section['content']) > 100:
+                current_section['visual_opportunity'] = True
+            sections.append(current_section)
+        
+        # If we have multiple sections but no visual opportunities yet,
+        # mark every third paragraph section as a visual opportunity
+        visual_ops = sum(1 for s in sections if s.get('visual_opportunity', False))
+        if len(sections) > 3 and visual_ops == 0:
+            paragraph_count = 0
+            for i, section in enumerate(sections):
+                if section['type'] == 'paragraph':
+                    paragraph_count += 1
+                    if paragraph_count % 3 == 0:
+                        sections[i]['visual_opportunity'] = True
+            
+        return sections

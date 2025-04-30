@@ -80,6 +80,8 @@ class ExportAgent(BaseAgent):
                                 if file_id:
                                     # Update the visual with the Google Drive file ID
                                     visual.file_path = file_id
+                                    # Also update file_id to maintain compatibility with the rest of the codebase
+                                    visual.file_id = file_id
                                     db_session.commit()
                                     uploaded_visuals.append(visual)
                                     self.log_status(f"Successfully uploaded visual to Drive with ID: {file_id}")
@@ -90,7 +92,10 @@ class ExportAgent(BaseAgent):
                     else:
                         self.log_status(f"Visual file not found at path: {visual.file_path}")
                 else:
-                    # This is already a Drive ID or URL
+                    # This is already a Drive ID or URL, make sure file_id is also set
+                    if not visual.file_id:
+                        visual.file_id = visual.file_path
+                        db_session.commit()
                     uploaded_visuals.append(visual)
                     self.log_status(f"Visual already has Drive ID: {visual.file_path}")
         
@@ -108,9 +113,11 @@ class ExportAgent(BaseAgent):
                 for header_image in header_images:
                     try:
                         self.log_status(f"Inserting header image at beginning of document")
+                        # Use file_id instead of file_path for consistency
+                        image_id = header_image.file_id if header_image.file_id else header_image.file_path
                         await self.docs_client.insert_image(
                             document_id=doc_id,
-                            image_id=header_image.file_path,
+                            image_id=image_id,
                             position=1  # Top of document, after title
                         )
                     except Exception as e:
@@ -129,9 +136,11 @@ class ExportAgent(BaseAgent):
                     if i < len(positions):
                         try:
                             self.log_status(f"Inserting {visual.type} at position {positions[i]}")
+                            # Use file_id instead of file_path for consistency
+                            image_id = visual.file_id if visual.file_id else visual.file_path
                             await self.docs_client.insert_image(
                                 document_id=doc_id,
-                                image_id=visual.file_path,
+                                image_id=image_id,
                                 position=positions[i]
                             )
                         except Exception as e:
