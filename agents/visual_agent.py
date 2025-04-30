@@ -12,11 +12,13 @@ from typing import List, Dict, Any, Optional, Tuple
 import re
 from sqlalchemy.orm import Session
 import time
+import tempfile
 
 from .base_agent import BaseAgent
 from services.api_clients.gemini_client import GeminiClient
 from services.api_clients.google_drive_client import GoogleDriveClient
 from services.api_clients.stable_diffusion_client import StableDiffusionClient
+from services.api_clients.huggingface_client import HuggingFaceClient
 from models.content_models import Visual, Article, VisualType
 from models import db_session
 from utils.agent_metrics import timed_step
@@ -32,11 +34,13 @@ class VisualAgent(BaseAgent):
     
     def __init__(self, gemini_client: Optional[GeminiClient] = None,
                  google_drive_client: Optional[GoogleDriveClient] = None,
-                 stable_diffusion_client: Optional[StableDiffusionClient] = None):
+                 stable_diffusion_client: Optional[StableDiffusionClient] = None,
+                 huggingface_client: Optional[HuggingFaceClient] = None):
         super().__init__("Visual Agent", "Generates visual content for articles")
         self.gemini_client = gemini_client or GeminiClient()
         self.google_drive_client = google_drive_client or GoogleDriveClient()
         self.stable_diffusion_client = stable_diffusion_client or StableDiffusionClient()
+        self.huggingface_client = huggingface_client or HuggingFaceClient()
         
         # Create output directory if it doesn't exist
         os.makedirs("data/visuals", exist_ok=True)
@@ -63,10 +67,22 @@ class VisualAgent(BaseAgent):
                 "font_family": "Calibri",
                 "background_color": "#FFFFFF",
                 "text_color": "#34495e",
-                "accent_color": "#7f8c8d"
+                "accent_color": "#7f8c88d"
             }
         }
-    
+        
+        # Determine which image generation client to use by default
+        # Prioritize: 1. StableDiffusion, 2. HuggingFace, 3. Gemini placeholder
+        if self.stable_diffusion_client.api_key:
+            logger.info("Using Stable Diffusion API for image generation")
+            self.default_image_client = "stable_diffusion"
+        elif self.huggingface_client.api_token:
+            logger.info("Using Hugging Face API for free image generation")
+            self.default_image_client = "huggingface"
+        else:
+            logger.info("No image generation API keys found, will use placeholders")
+            self.default_image_client = "placeholder"
+        
     async def analyze_content(self, article: Article) -> Dict[str, Any]:
         """
         Analyze the article content to determine optimal visual strategy.
@@ -285,27 +301,43 @@ class VisualAgent(BaseAgent):
             tone = analysis["strategy"].get("tone", "Informative")
             
             prompt = f"""
-            Create a professional header image for an article with the title: "{article.title}"
+            Professional header image for an article titled: "{article.title}"
             
             Key themes: {', '.join(themes[:3])}
             Tone: {tone}
             
-            Make the image visually appealing, professional, and relevant to the content.
-            The image should be suitable as a header at the top of the article.
-            Avoid text in the image. Create a clean, high-quality image with good composition.
+            High-quality, professional business image with modern design, clean layout.
+            Suitable as a header at the top of a corporate article.
+            No text overlay needed. Use relevant imagery representing {', '.join(themes[:2])}.
             """
             
-            # Generate the image
-            image_data = await self.gemini_client.generate_image(prompt)
+            # Create a temporary Visual object for the generation process
+            temp_visual = Visual(
+                title=f"Header image for {article.title}",
+                type="header_image",
+                file_path=""
+            )
             
-            if not image_data:
+            # Generate the image using Stable Diffusion
+            image_path, metadata = await self._generate_image(prompt, temp_visual)
+            
+            if not image_path:
                 logger.warning(f"Failed to generate header image for {article.title}")
                 return None
                 
             # Upload to Google Drive
             filename = f"header_{article.id}.png"
+            with open(image_path, "rb") as f:
+                image_data = f.read()
+                
             file_id = await self.google_drive_client.upload_image(image_data, filename)
             
+            # Clean up temporary file
+            try:
+                os.remove(image_path)
+            except:
+                pass
+                
             if not file_id:
                 logger.warning(f"Failed to upload header image for {article.title}")
                 return None
@@ -313,8 +345,8 @@ class VisualAgent(BaseAgent):
             # Create the Visual object with only the fields supported by the model
             visual = Visual(
                 title=f"Header image for {article.title}",
-                type="header_image",  # Updated to match expected type values
-                file_path=file_id,  # Use file_id as file_path
+                type="header_image",
+                file_path=file_id,
                 article_id=article.id
             )
             
@@ -336,6 +368,7 @@ class VisualAgent(BaseAgent):
         Returns:
             List of Visual objects
         """
+        import tempfile
         infographics = []
         
         try:
@@ -367,34 +400,51 @@ class VisualAgent(BaseAgent):
                         relevant_section = analysis["sections"][0][0]
                 
                 prompt = f"""
-                Create an informative infographic that explains or illustrates this concept:
+                Create an informative infographic that explains this concept:
                 "{concept}"
                 
                 This is for an article titled: "{article.title}"
                 
-                Make it visually appealing, clear, and educational.
-                Use a professional design style with consistent colors.
-                The infographic should stand alone in explaining the concept.
+                Professional business style infographic with clean design, clear organization.
+                Use modern color scheme and simple icons to represent the concept.
+                Include a clear title and concise text explaining the concept.
                 """
                 
-                # Generate the image
-                image_data = await self.gemini_client.generate_image(prompt)
+                # Create a temporary Visual object for the generation process
+                temp_visual = Visual(
+                    title=f"Infographic: {str(concept)[:50]}..." if len(str(concept)) > 50 else f"Infographic: {concept}",
+                    type="infographic",
+                    file_path=""
+                )
                 
-                if not image_data:
+                # Generate the image using StableDiffusion if available
+                image_path, metadata = await self._generate_image(prompt, temp_visual)
+                
+                if not image_path:
                     logger.warning(f"Failed to generate infographic for concept: {concept}")
                     continue
                     
                 # Upload to Google Drive
                 filename = f"infographic_{i}_{article.id}.png"
+                
+                with open(image_path, "rb") as f:
+                    image_data = f.read()
+                    
                 file_id = await self.google_drive_client.upload_image(image_data, filename)
                 
+                # Clean up temporary file
+                try:
+                    os.remove(image_path)
+                except:
+                    pass
+                    
                 if not file_id:
                     logger.warning(f"Failed to upload infographic for concept: {concept}")
                     continue
                     
-                # Create the Visual object with only the fields supported by the model
+                # Create the Visual object
                 visual = Visual(
-                    title=f"Infographic: {concept[:50]}..." if len(str(concept)) > 50 else f"Infographic: {concept}",
+                    title=f"Infographic: {str(concept)[:50]}..." if len(str(concept)) > 50 else f"Infographic: {concept}",
                     type="infographic",
                     file_path=file_id,
                     article_id=article.id
@@ -422,6 +472,7 @@ class VisualAgent(BaseAgent):
         Returns:
             List of Visual objects
         """
+        import tempfile
         charts = []
         
         try:
@@ -456,24 +507,41 @@ class VisualAgent(BaseAgent):
                 Include a clear title and labels.
                 """
                 
-                # Generate the image
-                image_data = await self.gemini_client.generate_image(prompt)
+                # Create a temporary Visual object for the generation process
+                temp_visual = Visual(
+                    title=f"Chart: {str(data_point)[:50]}..." if len(str(data_point)) > 50 else f"Chart: {data_point}",
+                    type="chart",
+                    file_path=""
+                )
                 
-                if not image_data:
+                # Generate the image using StableDiffusion if available
+                image_path, metadata = await self._generate_image(prompt, temp_visual)
+                
+                if not image_path:
                     logger.warning(f"Failed to generate chart for data point: {data_point}")
                     continue
                     
                 # Upload to Google Drive
                 filename = f"chart_{i}_{article.id}.png"
+                
+                with open(image_path, "rb") as f:
+                    image_data = f.read()
+                    
                 file_id = await self.google_drive_client.upload_image(image_data, filename)
                 
+                # Clean up temporary file
+                try:
+                    os.remove(image_path)
+                except:
+                    pass
+                    
                 if not file_id:
                     logger.warning(f"Failed to upload chart for data point: {data_point}")
                     continue
                     
-                # Create the Visual object with only the fields supported by the model
+                # Create the Visual object
                 visual = Visual(
-                    title=f"Chart: {data_point[:50]}..." if len(str(data_point)) > 50 else f"Chart: {data_point}",
+                    title=f"Chart: {str(data_point)[:50]}..." if len(str(data_point)) > 50 else f"Chart: {data_point}",
                     type="chart",
                     file_path=file_id,
                     article_id=article.id
@@ -501,6 +569,7 @@ class VisualAgent(BaseAgent):
         Returns:
             List of Visual objects
         """
+        import tempfile
         quote_cards = []
         
         try:
@@ -544,35 +613,52 @@ class VisualAgent(BaseAgent):
                 quote = quotes[i]
                 
                 prompt = f"""
-                Create a professional quote card with this quote:
-                "{quote}"
+                Create a professional quote card with this quote: "{quote}"
                 
                 This is for an article titled: "{article.title}"
                 
-                Make it visually striking with an elegant design.
-                The quote should be the focal point with appropriate typography.
-                Use a clean background that complements the tone of the article.
+                High-quality business style quote card with elegant typography.
+                The quote should be the focal point with elegant typography.
+                Use a clean, professional background that evokes the theme of the article.
+                Make the design modern and suitable for corporate/business context.
                 """
                 
-                # Generate the image
-                image_data = await self.gemini_client.generate_image(prompt)
+                # Create a temporary Visual object for the generation process
+                temp_visual = Visual(
+                    title=f"Quote: {quote[:50]}..." if len(quote) > 50 else f"Quote: {quote}",
+                    type="quote_card",
+                    file_path=""
+                )
                 
-                if not image_data:
+                # Generate the image using StableDiffusion if available
+                image_path, metadata = await self._generate_image(prompt, temp_visual)
+                
+                if not image_path:
                     logger.warning(f"Failed to generate quote card for: {quote[:30]}...")
                     continue
                     
                 # Upload to Google Drive
                 filename = f"quote_{i}_{article.id}.png"
+                
+                with open(image_path, "rb") as f:
+                    image_data = f.read()
+                    
                 file_id = await self.google_drive_client.upload_image(image_data, filename)
                 
+                # Clean up temporary file
+                try:
+                    os.remove(image_path)
+                except:
+                    pass
+                    
                 if not file_id:
                     logger.warning(f"Failed to upload quote card for: {quote[:30]}...")
                     continue
                     
-                # Create the Visual object with only the fields supported by the model
+                # Create the Visual object
                 visual = Visual(
                     title=f"Quote: {quote[:50]}..." if len(quote) > 50 else f"Quote: {quote}",
-                    type="quote_card",  # Match expected enum values
+                    type="quote_card",
                     file_path=file_id,
                     article_id=article.id
                 )
@@ -802,3 +888,77 @@ class VisualAgent(BaseAgent):
             if section.title.lower() == section_title.lower():
                 return section.content
         return None
+    
+    async def _generate_image(self, prompt: str, visual: Visual) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """
+        Central method to generate an image using whatever client is available.
+        Uses a priority system: 1. Stable Diffusion, 2. Hugging Face, 3. Mock images
+        
+        Args:
+            prompt: The prompt to generate the image from
+            visual: The Visual object containing metadata
+            
+        Returns:
+            Tuple containing (temporary file path to the generated image, metadata)
+        """
+        logger.info(f"Generating image for visual: {visual.title}")
+        
+        # Try StableDiffusion first if API key is available
+        if self.default_image_client == "stable_diffusion":
+            try:
+                logger.info("Using Stable Diffusion API for image generation")
+                image_path, metadata = await self.stable_diffusion_client.generate_image(prompt, visual)
+                if image_path:
+                    logger.info(f"Successfully generated image with Stable Diffusion for: {visual.title}")
+                    return image_path, metadata
+            except Exception as e:
+                logger.error(f"Error with Stable Diffusion image generation: {str(e)}")
+        
+        # Try Hugging Face if API token is available
+        if self.default_image_client in ["huggingface", "placeholder"] and self.huggingface_client.api_token:
+            try:
+                logger.info("Using Hugging Face API for free image generation")
+                image_path, metadata = await self.huggingface_client.generate_image(prompt, visual)
+                if image_path:
+                    logger.info(f"Successfully generated image with Hugging Face for: {visual.title}")
+                    return image_path, metadata
+            except Exception as e:
+                logger.error(f"Error with Hugging Face image generation: {str(e)}")
+        
+        # Try mock generation with Hugging Face 
+        try:
+            logger.info("Using Hugging Face mock image generation")
+            image_path, metadata = await self.huggingface_client.generate_image_mock(prompt, visual)
+            if image_path:
+                logger.info(f"Successfully generated mock image with Hugging Face for: {visual.title}")
+                return image_path, metadata
+        except Exception as e:
+            logger.error(f"Error with Hugging Face mock generation: {str(e)}")
+        
+        # Last resort: Stable Diffusion mock image
+        try:
+            logger.info("Using Stable Diffusion mock image generation")
+            image_path, metadata = await self.stable_diffusion_client.generate_image_mock(prompt, visual)
+            if image_path:
+                logger.info(f"Successfully generated mock image with Stable Diffusion for: {visual.title}")
+                return image_path, metadata
+        except Exception as e:
+            logger.error(f"Error with Stable Diffusion mock generation: {str(e)}")
+        
+        # Absolute last resort: Gemini placeholder
+        try:
+            logger.info("Using Gemini placeholder as last resort")
+            image_data = await self.gemini_client.generate_image(prompt)
+            if image_data:
+                # Save to a temporary file
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+                    temp_file.write(image_data)
+                    image_path = temp_file.name
+                
+                logger.info(f"Successfully generated Gemini placeholder for: {visual.title}")
+                return image_path, {"mock": True, "source": "gemini_placeholder"}
+        except Exception as e:
+            logger.error(f"Error with Gemini placeholder generation: {str(e)}")
+        
+        logger.error(f"All image generation methods failed for visual: {visual.title}")
+        return None, None

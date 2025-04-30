@@ -305,7 +305,7 @@ class GoogleDocsClient:
         return plain_text, requests
 
     def write_content(self, doc_id: str, content: str) -> bool:
-        """Write content to a Google Doc with proper markdown formatting.
+        """Write content to a Google Doc with proper markdown formatting and spacing.
         
         Args:
             doc_id: The ID of the Google Doc
@@ -333,8 +333,93 @@ class GoogleDocsClient:
             end_index = doc.get('body', {}).get('content', [])[-1].get('endIndex', 1)
             insertion_index = max(1, end_index - 1)  # Start at least at index 1 to preserve title
             
+            # Apply document-wide formatting for better readability
+            self.docs_service.documents().batchUpdate(
+                documentId=doc_id,
+                body={
+                    'requests': [
+                        # Set document margins for better spacing
+                        {
+                            'updateDocumentStyle': {
+                                'documentStyle': {
+                                    'marginTop': {
+                                        'magnitude': 72,  # 1 inch in points
+                                        'unit': 'PT'
+                                    },
+                                    'marginBottom': {
+                                        'magnitude': 72,
+                                        'unit': 'PT'
+                                    },
+                                    'marginLeft': {
+                                        'magnitude': 72,
+                                        'unit': 'PT'
+                                    },
+                                    'marginRight': {
+                                        'magnitude': 72,
+                                        'unit': 'PT'
+                                    }
+                                },
+                                'fields': 'marginTop,marginBottom,marginLeft,marginRight'
+                            }
+                        },
+                        # Apply professional paragraph spacing
+                        {
+                            'updateParagraphStyle': {
+                                'range': {
+                                    'startIndex': 1,
+                                    'endIndex': end_index
+                                },
+                                'paragraphStyle': {
+                                    'lineSpacing': 115,  # 1.15 line spacing
+                                    'spaceAbove': {
+                                        'magnitude': 6,
+                                        'unit': 'PT'
+                                    },
+                                    'spaceBelow': {
+                                        'magnitude': 12,
+                                        'unit': 'PT'
+                                    }
+                                },
+                                'fields': 'lineSpacing,spaceAbove,spaceBelow'
+                            }
+                        }
+                    ]
+                }
+            ).execute()
+            
+            # Improve text readability with a professional font
+            self.docs_service.documents().batchUpdate(
+                documentId=doc_id,
+                body={
+                    'requests': [
+                        {
+                            'updateTextStyle': {
+                                'range': {
+                                    'startIndex': 1,
+                                    'endIndex': end_index
+                                },
+                                'textStyle': {
+                                    'fontSize': {
+                                        'magnitude': 11,
+                                        'unit': 'PT'
+                                    },
+                                    'weightedFontFamily': {
+                                        'fontFamily': 'Arial',
+                                        'weight': 400
+                                    }
+                                },
+                                'fields': 'fontSize,weightedFontFamily'
+                            }
+                        }
+                    ]
+                }
+            ).execute()
+            
             # Split content into chunks if it's too large
             content_chunks = self._split_content(cleaned_content)
+            
+            # Add visible paragraph breaks between sections to improve readability
+            cleaned_content = self._ensure_paragraph_breaks(cleaned_content)
             
             for chunk in content_chunks:
                 # Parse markdown and get formatting requests
@@ -371,6 +456,10 @@ class GoogleDocsClient:
                     end_index = doc.get('body', {}).get('content', [])[-1].get('endIndex', 1)
                     insertion_index = max(1, end_index - 1)
             
+            # Format headings with more spacing and larger font sizes
+            doc = self.docs_service.documents().get(documentId=doc_id).execute()
+            self._enhance_heading_styles(doc_id, doc)
+            
             # Add a review section at the end
             review_section = "\n\n## For Review\nPlease add any feedback or comments below:\n- \n- \n- \n"
             self.docs_service.documents().batchUpdate(
@@ -395,6 +484,183 @@ class GoogleDocsClient:
         except Exception as e:
             logger.error(f"Error writing content to Google Doc: {e}")
             return False
+    
+    def _ensure_paragraph_breaks(self, content: str) -> str:
+        """Ensure proper paragraph breaks between sections for better readability."""
+        # Make sure headers have space before them
+        content = re.sub(r'([^\n])\n(#{1,3}\s+)', r'\1\n\n\2', content)
+        
+        # Ensure double line breaks between paragraphs
+        content = re.sub(r'([^\n])\n([^#\s])', r'\1\n\n\2', content)
+        
+        # Normalize multiple consecutive new lines to just two
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        
+        return content
+        
+    def _enhance_heading_styles(self, doc_id: str, doc: dict) -> None:
+        """Apply enhanced styles to headings for better visual hierarchy."""
+        try:
+            content = doc.get('body', {}).get('content', [])
+            heading_requests = []
+            
+            # Find all heading paragraphs
+            for item in content:
+                if 'paragraph' in item:
+                    paragraph = item.get('paragraph', {})
+                    style = paragraph.get('paragraphStyle', {}).get('namedStyleType', '')
+                    
+                    # Check if it's a heading style
+                    if style.startswith('HEADING_'):
+                        heading_level = int(style[-1])
+                        start_index = item.get('startIndex', 0)
+                        end_index = item.get('endIndex', 0)
+                        
+                        # Create requests to enhance heading formatting
+                        # Differentiate heading sizes and add more spacing
+                        if heading_level == 1:
+                            heading_requests.append({
+                                'updateParagraphStyle': {
+                                    'range': {
+                                        'startIndex': start_index,
+                                        'endIndex': end_index
+                                    },
+                                    'paragraphStyle': {
+                                        'spaceAbove': {
+                                            'magnitude': 24,
+                                            'unit': 'PT'
+                                        },
+                                        'spaceBelow': {
+                                            'magnitude': 12,
+                                            'unit': 'PT'
+                                        }
+                                    },
+                                    'fields': 'spaceAbove,spaceBelow'
+                                }
+                            })
+                            
+                            # Apply bold and larger font size to H1
+                            heading_requests.append({
+                                'updateTextStyle': {
+                                    'range': {
+                                        'startIndex': start_index,
+                                        'endIndex': end_index - 1  # Exclude the newline
+                                    },
+                                    'textStyle': {
+                                        'fontSize': {
+                                            'magnitude': 18,
+                                            'unit': 'PT'
+                                        },
+                                        'bold': True,
+                                        'foregroundColor': {
+                                            'color': {
+                                                'rgbColor': {
+                                                    'red': 0.2,
+                                                    'green': 0.2,
+                                                    'blue': 0.6
+                                                }
+                                            }
+                                        }
+                                    },
+                                    'fields': 'fontSize,bold,foregroundColor'
+                                }
+                            })
+                        elif heading_level == 2:
+                            heading_requests.append({
+                                'updateParagraphStyle': {
+                                    'range': {
+                                        'startIndex': start_index,
+                                        'endIndex': end_index
+                                    },
+                                    'paragraphStyle': {
+                                        'spaceAbove': {
+                                            'magnitude': 18,
+                                            'unit': 'PT'
+                                        },
+                                        'spaceBelow': {
+                                            'magnitude': 8,
+                                            'unit': 'PT'
+                                        }
+                                    },
+                                    'fields': 'spaceAbove,spaceBelow'
+                                }
+                            })
+                            
+                            # Apply bold and medium font size to H2
+                            heading_requests.append({
+                                'updateTextStyle': {
+                                    'range': {
+                                        'startIndex': start_index,
+                                        'endIndex': end_index - 1
+                                    },
+                                    'textStyle': {
+                                        'fontSize': {
+                                            'magnitude': 16,
+                                            'unit': 'PT'
+                                        },
+                                        'bold': True,
+                                        'foregroundColor': {
+                                            'color': {
+                                                'rgbColor': {
+                                                    'red': 0.2,
+                                                    'green': 0.2,
+                                                    'blue': 0.5
+                                                }
+                                            }
+                                        }
+                                    },
+                                    'fields': 'fontSize,bold,foregroundColor'
+                                }
+                            })
+                        elif heading_level == 3:
+                            heading_requests.append({
+                                'updateParagraphStyle': {
+                                    'range': {
+                                        'startIndex': start_index,
+                                        'endIndex': end_index
+                                    },
+                                    'paragraphStyle': {
+                                        'spaceAbove': {
+                                            'magnitude': 16,
+                                            'unit': 'PT'
+                                        },
+                                        'spaceBelow': {
+                                            'magnitude': 6,
+                                            'unit': 'PT'
+                                        }
+                                    },
+                                    'fields': 'spaceAbove,spaceBelow'
+                                }
+                            })
+                            
+                            # Apply bold and slightly larger font size to H3
+                            heading_requests.append({
+                                'updateTextStyle': {
+                                    'range': {
+                                        'startIndex': start_index,
+                                        'endIndex': end_index - 1
+                                    },
+                                    'textStyle': {
+                                        'fontSize': {
+                                            'magnitude': 14,
+                                            'unit': 'PT'
+                                        },
+                                        'bold': True
+                                    },
+                                    'fields': 'fontSize,bold'
+                                }
+                            })
+            
+            # Apply all heading enhancement requests
+            if heading_requests:
+                self.docs_service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={'requests': heading_requests}
+                ).execute()
+                
+        except Exception as e:
+            logger.error(f"Error enhancing heading styles: {str(e)}")
+            # Continue execution even if heading enhancement fails
     
     async def append_content(self, doc_id, content):
         """Append content to the end of a Google Doc."""
@@ -447,16 +713,20 @@ class GoogleDocsClient:
             
             # Get the document to determine insert position if not specified
             if position is None:
-                document = await self.get_document(document_id)
+                # Use the existing docs_service instance
+                document = self.docs_service.documents().get(documentId=document_id).execute()
                 content = document.get('body', {}).get('content', [])
                 if content:
                     position = content[-1].get("endIndex", 1)
                 else:
                     position = 1
             
-            # Initialize the Docs API service
-            creds = await self._get_credentials()
-            service = build('docs', 'v1', credentials=creds)
+            # Use the existing docs_service instance instead of creating a new one
+            service = self.docs_service
+            
+            # Ensure image URL is formatted correctly for Google Docs
+            image_url = f'https://drive.google.com/uc?id={image_id}'
+            logger.info(f"Using image URL: {image_url}")
             
             # Create a request to insert the image
             request = {
@@ -464,7 +734,7 @@ class GoogleDocsClient:
                     'location': {
                         'index': position
                     },
-                    'uri': f'https://drive.google.com/uc?id={image_id}',
+                    'uri': image_url,
                     'objectSize': {
                         'width': {
                             'magnitude': 600,
@@ -491,8 +761,8 @@ class GoogleDocsClient:
                 }
             ]
             
-            # Execute the requests
-            service.documents().batchUpdate(
+            # Execute the requests using the existing service instance
+            result = service.documents().batchUpdate(
                 documentId=document_id,
                 body={'requests': requests}
             ).execute()
@@ -562,8 +832,8 @@ class GoogleDocsClient:
             position: The position to insert at
         """
         try:
-            creds = await self._get_credentials()
-            service = build('docs', 'v1', credentials=creds)
+            # Use the existing docs_service instance
+            service = self.docs_service
             
             # Create requests to insert the caption with center alignment and italic formatting
             requests = [

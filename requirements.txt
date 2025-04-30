@@ -44,9 +44,11 @@ python-dateutil
 pytz
 loguru
 
-# medium-sdk
+# Image Generation
+aiohttp
+huggingface_hub
 
-# Add these to requirements.txt
+# Google APIs
 google-auth
 google-auth-oauthlib
 google-auth-httplib2

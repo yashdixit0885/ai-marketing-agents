@@ -57,8 +57,85 @@ class ExportAgent(BaseAgent):
         else:
             self.log_status(f"Found existing document: {doc_name}")
         
-        # Write article content to the doc (replacing existing content)
+        # First upload all images to Google Drive
+        uploaded_visuals = []
+        visuals = db_session.query(Visual).filter(Visual.article_id == article.id).all()
+        
+        if visuals:
+            self.log_status(f"Processing {len(visuals)} visuals for article")
+            for visual in visuals:
+                # Check if file_path is a Google Drive ID or a local file path
+                if visual.file_path and not visual.file_path.startswith('http'):
+                    # If this is a local file that exists, upload it
+                    if os.path.exists(visual.file_path):
+                        visual_name = f"{visual.type}_{visual.id}"
+                        self.log_status(f"Uploading visual from local path: {visual.file_path}")
+                        
+                        # Upload the file to Google Drive
+                        try:
+                            with open(visual.file_path, 'rb') as file:
+                                file_data = file.read()
+                                file_id = await self.drive_client.upload_image(file_data, visual_name)
+                                
+                                if file_id:
+                                    # Update the visual with the Google Drive file ID
+                                    visual.file_path = file_id
+                                    db_session.commit()
+                                    uploaded_visuals.append(visual)
+                                    self.log_status(f"Successfully uploaded visual to Drive with ID: {file_id}")
+                                else:
+                                    self.log_status(f"Failed to upload visual: {visual_name}")
+                        except Exception as e:
+                            self.log_status(f"Error uploading visual: {str(e)}")
+                    else:
+                        self.log_status(f"Visual file not found at path: {visual.file_path}")
+                else:
+                    # This is already a Drive ID or URL
+                    uploaded_visuals.append(visual)
+                    self.log_status(f"Visual already has Drive ID: {visual.file_path}")
+        
+        # Now write the article content to the doc
         self.docs_client.write_content(doc_id, article.content)
+        
+        # After content is written, add the visuals to the document
+        if uploaded_visuals:
+            # Get the document to find appropriate insertion points
+            document = await self.docs_client.get_document(doc_id)
+            
+            # Insert header image first if present
+            header_images = [v for v in uploaded_visuals if v.type == 'header_image']
+            if header_images:
+                for header_image in header_images:
+                    try:
+                        self.log_status(f"Inserting header image at beginning of document")
+                        await self.docs_client.insert_image(
+                            document_id=doc_id,
+                            image_id=header_image.file_path,
+                            position=1  # Top of document, after title
+                        )
+                    except Exception as e:
+                        self.log_status(f"Failed to insert header image: {str(e)}")
+            
+            # Calculate positions for other visuals
+            other_visuals = [v for v in uploaded_visuals if v.type != 'header_image']
+            if other_visuals and document:
+                content = document.get('body', {}).get('content', [])
+                doc_length = content[-1].get('endIndex', 1) if content else 1
+                
+                # Distribute visuals throughout document
+                positions = self._calculate_visual_positions(doc_length, len(other_visuals))
+                
+                for i, visual in enumerate(other_visuals):
+                    if i < len(positions):
+                        try:
+                            self.log_status(f"Inserting {visual.type} at position {positions[i]}")
+                            await self.docs_client.insert_image(
+                                document_id=doc_id,
+                                image_id=visual.file_path,
+                                position=positions[i]
+                            )
+                        except Exception as e:
+                            self.log_status(f"Failed to insert visual: {str(e)}")
         
         # Create or find a doc for social posts
         social_posts = db_session.query(SocialPost).filter(SocialPost.article_id == article.id).all()
@@ -72,7 +149,6 @@ class ExportAgent(BaseAgent):
                 self.log_status(f"Created new social posts document: {social_doc_name}")
             else:
                 self.log_status(f"Found existing social posts document: {social_doc_name}")
-            
             
             # Prepare social post content with professional formatting
             social_content = f"# Social Media Posts for '{article.title}'\n\n"
@@ -94,43 +170,6 @@ class ExportAgent(BaseAgent):
             
             # Write social content to the doc (replacing existing content)
             self.docs_client.write_content(social_doc_id, social_content)
-        
-        # Upload visual files to Google Drive if they exist
-        visuals_data = []
-        visuals = db_session.query(Visual).filter(Visual.article_id == article.id).all()
-        if visuals:
-            for visual in visuals:
-                if os.path.exists(visual.file_path):
-                    # Check if this visual file already exists in the folder
-                    visual_name = f"{visual.type}_{visual.title}"
-                    existing_files = await self.drive_client.search_files(f"name='{visual_name}'", folder_id)
-                    
-                    if existing_files:
-                        # Use existing file
-                        file_id = existing_files[0].get('id')
-                        file_url = existing_files[0].get('webViewLink')
-                        web_content_link = existing_files[0].get('webContentLink')
-                        self.log_status(f"Found existing visual file: {visual_name}")
-                    else:
-                        # Upload the file to Google Drive
-                        file_id, file_url, web_content_link = await self.drive_client.upload_file(
-                            visual.file_path, 
-                            visual_name, 
-                            folder_id
-                        )
-                        self.log_status(f"Uploaded new visual file: {visual_name}")
-                    
-                    # Add to visuals data for document creation
-                    visuals_data.append({
-                        'file_id': file_id,
-                        'file_url': file_url,
-                        'web_content_link': web_content_link,
-                        'title': visual.title,
-                        'type': visual.type
-                    })
-
-        # Create a professional document with integrated visuals
-        await self.docs_client.create_professional_document(doc_id, article.content, visuals_data)
         
         # Check if an export record already exists
         existing_export = db_session.query(ArticleExport).filter(
@@ -416,6 +455,41 @@ class ExportAgent(BaseAgent):
         
         return insertion_points
 
+    def _calculate_visual_positions(self, doc_length: int, num_visuals: int) -> list:
+        """
+        Calculate positions in the document to insert visuals for even distribution.
+        
+        Args:
+            doc_length: Total length of the document
+            num_visuals: Number of visuals to insert
+            
+        Returns:
+            List of position indices for inserting visuals
+        """
+        positions = []
+        
+        # Skip the first 10% of content (usually intro)
+        start_pos = int(doc_length * 0.1)
+        
+        # Use the middle 80% of the document
+        usable_length = int(doc_length * 0.8)
+        
+        if num_visuals <= 0:
+            return positions
+            
+        # For a single visual, place it at the 1/3 point
+        if num_visuals == 1:
+            positions.append(start_pos + int(usable_length * 0.33))
+            return positions
+            
+        # For multiple visuals, distribute evenly
+        segment = usable_length / (num_visuals + 1)
+        for i in range(1, num_visuals + 1):
+            positions.append(start_pos + int(segment * i))
+            
+        self.log_status(f"Calculated {num_visuals} visual positions at: {positions}")
+        return positions
+
     async def create_professional_document(self, article: Article) -> str:
         """
         Create a professionally formatted Google Document from an article.
@@ -468,77 +542,3 @@ class ExportAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Error creating professional document: {str(e)}")
             return ""
-    
-    def _prepare_content(self, article: Article) -> str:
-        """
-        Prepare article content for Google Docs formatting.
-        
-        Args:
-            article: The Article object
-            
-        Returns:
-            Formatted content string
-        """
-        content_parts = []
-        
-        # Add metadata section
-        metadata = [
-            "# Article Metadata",
-            f"Title: {article.title}",
-            f"Author: {article.author if article.author else 'AI Content Generator'}",
-            f"Tags: {', '.join(article.tags) if article.tags else 'None'}"
-        ]
-        content_parts.append("\n".join(metadata))
-        
-        # Add article content based on its structure
-        if isinstance(article.content, str):
-            # If content is a simple string, add it directly
-            content_parts.append("\n\n# Article Content\n\n" + article.content)
-        elif isinstance(article.content, dict):
-            # If content is structured, format it accordingly
-            if "introduction" in article.content:
-                content_parts.append(f"\n\n# Introduction\n\n{article.content['introduction']}")
-            
-            # Add sections if present
-            if "sections" in article.content and isinstance(article.content["sections"], list):
-                for i, section in enumerate(article.content["sections"]):
-                    if isinstance(section, dict) and "heading" in section:
-                        heading = f"\n\n## {section['heading']}\n\n"
-                        section_content = section.get("content", "")
-                        content_parts.append(heading + section_content)
-                    elif isinstance(section, str):
-                        # Fallback for simple string sections
-                        content_parts.append(f"\n\n## Section {i+1}\n\n{section}")
-            
-            # Add conclusion if present
-            if "conclusion" in article.content:
-                content_parts.append(f"\n\n# Conclusion\n\n{article.content['conclusion']}")
-        
-        # Join all parts with double newlines
-        return "\n\n".join(content_parts)
-    
-    async def export_to_platforms(self, article: Article) -> Dict[str, str]:
-        """
-        Export article to various configured platforms.
-        
-        Args:
-            article: The Article object to export
-            
-        Returns:
-            Dictionary mapping platform names to export URLs/IDs
-        """
-        results = {}
-        
-        try:
-            # Create a Google Doc as the primary export
-            doc_id = await self.create_professional_document(article)
-            if doc_id:
-                results["google_docs"] = f"https://docs.google.com/document/d/{doc_id}/edit"
-            
-            # TODO: Add export to other platforms like Medium, Substack, etc.
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error exporting article to platforms: {str(e)}")
-            return results
