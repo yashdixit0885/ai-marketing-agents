@@ -4,7 +4,7 @@ import logging
 import os
 import base64
 import io
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +55,19 @@ class GeminiClient:
             
             # Draw placeholder text
             try:
-                font = ImageFont.truetype("Arial", 20)
-            except IOError:
+                # Try to load a system font - different options for different OS
+                font_options = ['Arial', 'Helvetica', 'DejaVuSans', 'FreeSans']
+                font = None
+                for font_name in font_options:
+                    try:
+                        font = ImageFont.truetype(font_name, 20)
+                        break
+                    except IOError:
+                        continue
+                
+                if font is None:
+                    font = ImageFont.load_default()
+            except Exception:
                 font = ImageFont.load_default()
             
             # Use the first 100 chars of prompt as text in the image
@@ -69,7 +80,9 @@ class GeminiClient:
             
             for word in words:
                 test_line = current_line + word + " "
-                text_width = draw.textlength(test_line, font=font)
+                # Use modern approach to calculate text width
+                text_bbox = font.getbbox(test_line)
+                text_width = text_bbox[2] - text_bbox[0]
                 
                 if text_width < width - 60:  # Leave margins
                     current_line = test_line
@@ -80,13 +93,18 @@ class GeminiClient:
             lines.append(current_line)  # Add the last line
             
             # Calculate text height for centering
-            line_height = font.getsize("A")[1] + 5
+            # Use getbbox rather than deprecated getsize
+            # Get the height of a capital letter as an approximation for line height
+            sample_bbox = font.getbbox("A")
+            line_height = (sample_bbox[3] - sample_bbox[1]) + 5
             text_height = len(lines) * line_height
             y_position = (height - text_height) // 2
             
             # Draw each line of text
             for line in lines:
-                text_width = draw.textlength(line, font=font)
+                # Calculate text width for centering
+                text_bbox = font.getbbox(line)
+                text_width = text_bbox[2] - text_bbox[0]
                 position = ((width - text_width) // 2, y_position)
                 draw.text(position, line, font=font, fill=(0, 0, 0))
                 y_position += line_height

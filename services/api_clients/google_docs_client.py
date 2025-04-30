@@ -637,19 +637,68 @@ class GoogleDocsClient:
             # If we have visuals, try to insert them
             if visuals and len(visuals) > 0:
                 try:
-                    # Insert visuals one by one
-                    for visual in visuals:
-                        if hasattr(visual, 'file_id') and visual.file_id:
-                            # Determine where to place the visual
+                    logger.info(f"Inserting {len(visuals)} visuals into document {doc_id}")
+                    # Insert header image first if present
+                    header_images = [v for v in visuals if v.type == 'header_image']
+                    if header_images:
+                        # Insert at the beginning of the document
+                        for visual in header_images:
+                            # The Visual model stores the Google Drive file ID in file_path
                             placement_successful = await self.insert_image(
                                 document_id=doc_id, 
-                                image_id=visual.file_id
+                                image_id=visual.file_path,
+                                position=1  # Top of document
                             )
-                            if not placement_successful:
-                                logger.warning(f"Failed to place visual {visual.title} in document {doc_id}")
+                            if placement_successful:
+                                logger.info(f"Inserted header image {visual.title} at beginning of document")
+                            else:
+                                logger.warning(f"Failed to insert header image {visual.title}")
+                    
+                    # Insert remaining visuals distributed throughout the document
+                    other_visuals = [v for v in visuals if v.type != 'header_image']
+                    if other_visuals:
+                        # Get document to find appropriate positions
+                        document = self.docs_service.documents().get(documentId=doc_id).execute()
+                        content = document.get('body', {}).get('content', [])
+                        
+                        if content:
+                            doc_length = content[-1].get('endIndex', 1)
+                            
+                            # Calculate positions to distribute visuals evenly
+                            num_visuals = len(other_visuals)
+                            
+                            # Start after the first 15% of content
+                            start_pos = max(int(doc_length * 0.15), 1)
+                            
+                            # Distribute throughout the remaining 75% of the document
+                            remaining_space = int(doc_length * 0.75)
+                            
+                            if num_visuals == 1:
+                                # Single visual goes at 1/3 point
+                                positions = [start_pos + int(remaining_space * 0.33)]
+                            else:
+                                # Multiple visuals distributed evenly
+                                positions = []
+                                for i in range(num_visuals):
+                                    pos = start_pos + int((i + 1) * remaining_space / (num_visuals + 1))
+                                    positions.append(pos)
+                                
+                            # Insert visuals at calculated positions
+                            for i, visual in enumerate(other_visuals):
+                                if i < len(positions):
+                                    placement_successful = await self.insert_image(
+                                        document_id=doc_id,
+                                        image_id=visual.file_path,
+                                        position=positions[i]
+                                    )
+                                    if placement_successful:
+                                        logger.info(f"Inserted {visual.type} visual {visual.title} at position {positions[i]}")
+                                    else:
+                                        logger.warning(f"Failed to insert {visual.type} visual {visual.title}")
+                                        
                 except Exception as e:
                     logger.error(f"Error placing visuals in document: {str(e)}")
-                    # Continue with the document creation even if visual placement fails
+                    # Continue with document creation even if visual placement fails
             
             logger.info(f"Professional document created with ID: {doc_id}")
             return {"documentId": doc_id, "title": article.title}
@@ -1194,3 +1243,21 @@ class GoogleDocsClient:
         except Exception as e:
             logger.error(f"Error sharing document: {e}")
             return False
+        
+    async def _get_credentials(self):
+        """Get credentials for API calls.
+        
+        Returns:
+            The credentials object
+        """
+        try:
+            # We already have credentials initialized in the constructor
+            return self.docs_service._credentials
+        except Exception as e:
+            logger.error(f"Error getting credentials: {str(e)}")
+            # Recreate credentials if needed
+            credentials_file = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            return service_account.Credentials.from_service_account_file(
+                credentials_file,
+                scopes=['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive']
+            )

@@ -310,14 +310,12 @@ class VisualAgent(BaseAgent):
                 logger.warning(f"Failed to upload header image for {article.title}")
                 return None
                 
-            # Create the Visual object
+            # Create the Visual object with only the fields supported by the model
             visual = Visual(
                 title=f"Header image for {article.title}",
-                type="header",
-                description=f"Header image illustrating the key themes: {', '.join(themes[:3])}",
-                file_id=file_id,
-                article_id=article.id,
-                placement="header"
+                type="header_image",  # Updated to match expected type values
+                file_path=file_id,  # Use file_id as file_path
+                article_id=article.id
             )
             
             logger.info(f"Successfully generated header image for {article.title}")
@@ -394,14 +392,12 @@ class VisualAgent(BaseAgent):
                     logger.warning(f"Failed to upload infographic for concept: {concept}")
                     continue
                     
-                # Create the Visual object
+                # Create the Visual object with only the fields supported by the model
                 visual = Visual(
-                    title=f"Infographic: {concept[:50]}..." if len(concept) > 50 else f"Infographic: {concept}",
+                    title=f"Infographic: {concept[:50]}..." if len(str(concept)) > 50 else f"Infographic: {concept}",
                     type="infographic",
-                    description=f"Infographic explaining the concept: {concept}",
-                    file_id=file_id,
-                    article_id=article.id,
-                    placement=relevant_section or "body"
+                    file_path=file_id,
+                    article_id=article.id
                 )
                 
                 infographics.append(visual)
@@ -475,14 +471,12 @@ class VisualAgent(BaseAgent):
                     logger.warning(f"Failed to upload chart for data point: {data_point}")
                     continue
                     
-                # Create the Visual object
+                # Create the Visual object with only the fields supported by the model
                 visual = Visual(
-                    title=f"Chart: {data_point[:50]}..." if len(data_point) > 50 else f"Chart: {data_point}",
+                    title=f"Chart: {data_point[:50]}..." if len(str(data_point)) > 50 else f"Chart: {data_point}",
                     type="chart",
-                    description=f"Chart visualizing: {data_point}",
-                    file_id=file_id,
-                    article_id=article.id,
-                    placement=relevant_section or "body"
+                    file_path=file_id,
+                    article_id=article.id
                 )
                 
                 charts.append(visual)
@@ -549,16 +543,6 @@ class VisualAgent(BaseAgent):
                     
                 quote = quotes[i]
                 
-                # Determine placement - quote cards typically work well towards the end
-                placement = "conclusion"
-                if "conclusion" not in [heading for heading, _ in analysis["sections"]]:
-                    # If no conclusion section, put it after the midpoint
-                    if len(analysis["sections"]) > 1:
-                        midpoint = len(analysis["sections"]) // 2
-                        placement = analysis["sections"][midpoint][0]
-                    else:
-                        placement = analysis["sections"][-1][0]
-                
                 prompt = f"""
                 Create a professional quote card with this quote:
                 "{quote}"
@@ -585,14 +569,12 @@ class VisualAgent(BaseAgent):
                     logger.warning(f"Failed to upload quote card for: {quote[:30]}...")
                     continue
                     
-                # Create the Visual object
+                # Create the Visual object with only the fields supported by the model
                 visual = Visual(
                     title=f"Quote: {quote[:50]}..." if len(quote) > 50 else f"Quote: {quote}",
-                    type="quote",
-                    description=f"Quote card featuring: {quote}",
-                    file_id=file_id,
-                    article_id=article.id,
-                    placement=placement
+                    type="quote_card",  # Match expected enum values
+                    file_path=file_id,
+                    article_id=article.id
                 )
                 
                 quote_cards.append(visual)

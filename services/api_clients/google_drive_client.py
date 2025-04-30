@@ -166,3 +166,64 @@ class GoogleDriveClient:
         if files:
             return files[0].get('id'), files[0].get('webViewLink')
         return None, None
+    
+    async def upload_image(self, image_data, filename, folder_id=None):
+        """
+        Upload image data to Google Drive.
+        
+        Args:
+            image_data: The binary data of the image
+            filename: The name to give the uploaded file
+            folder_id: Optional folder ID to place the file in
+            
+        Returns:
+            The file ID of the uploaded image
+        """
+        try:
+            from googleapiclient.http import MediaInMemoryUpload
+            import mimetypes
+            
+            # Determine mimetype from filename
+            mime_type, _ = mimetypes.guess_type(filename)
+            if not mime_type or not mime_type.startswith('image/'):
+                mime_type = 'image/png'  # Default to PNG if can't determine type
+            
+            file_metadata = {
+                'name': filename
+            }
+            
+            if folder_id:
+                file_metadata['parents'] = [folder_id]
+            
+            # Create a media upload object from the binary data
+            media = MediaInMemoryUpload(
+                image_data,
+                mimetype=mime_type,
+                resumable=True
+            )
+            
+            # Upload the file
+            file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, webViewLink, webContentLink'
+            ).execute()
+            
+            # Set file to be publicly accessible for embedding
+            permission = {
+                'type': 'anyone',
+                'role': 'reader'
+            }
+            
+            self.service.permissions().create(
+                fileId=file.get('id'),
+                body=permission,
+                fields='id'
+            ).execute()
+            
+            logger.info(f"Uploaded image: {filename} with ID: {file.get('id')}")
+            return file.get('id')
+            
+        except Exception as e:
+            logger.error(f"Failed to upload image {filename}: {str(e)}")
+            return None
