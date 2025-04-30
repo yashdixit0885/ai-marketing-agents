@@ -453,10 +453,13 @@ class AtomizationAgent(BaseAgent):
                 metadata["subject_line_options"] = content.get("subject_lines", [])
             metadata["word_count"] = len(str(content).split())
         
+        # Serialize content if it's a dictionary
+        content_to_store = json.dumps(content) if isinstance(content, dict) else content
+        
         # Create the social post
         social_post = SocialPost(
             platform=platform,
-            content=content,
+            content=content_to_store,
             status="draft",
             article_id=article.id,
             metadata=metadata

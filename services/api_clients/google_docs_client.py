@@ -620,461 +620,43 @@ class GoogleDocsClient:
         Returns:
             Document metadata including ID
         """
-        # Clean and parse content into sections
-        content = self._clean_content(article.content)
-        sections = self._parse_content_into_sections(content)
-        
-        # Categorize visuals by type for better integration
-        visual_map = self._categorize_visuals(visuals or [])
-        
         try:
             # Create new document
-            document = await self.create_document(article.title)
-            document_id = document.get('documentId')
+            doc_id = self.create_document(article.title)
             
-            if not document_id:
+            if not doc_id:
                 logger.error("Failed to create document")
-                return {}
+                return {"documentId": None}
                 
-            requests = []
-            current_index = 1  # Start after title
-            
-            # Add header image if available
-            header_image = visual_map.get('header_image', [None])[0]
-            if header_image:
-                # Insert header image
-                requests.append({
-                    'insertImage': {
-                        'location': {
-                            'index': current_index
-                        },
-                        'uri': await self._get_image_url(header_image.file_path),
-                        'objectSize': {
-                            'width': {
-                                'magnitude': 600,
-                                'unit': 'PT'
-                            }
-                        }
-                    }
-                })
-                current_index += 1
+            # Write the main article content first
+            content_written = self.write_content(doc_id, article.content)
+            if not content_written:
+                logger.error("Failed to write content to document")
+                return {"documentId": doc_id}  # Return ID even if content writing failed
                 
-                # Add caption below the image
-                requests.append({
-                    'insertText': {
-                        'location': {
-                            'index': current_index
-                        },
-                        'text': f"{header_image.title}\n\n"
-                    }
-                })
-                # Format the caption as centered and italic
-                requests.append({
-                    'updateTextStyle': {
-                        'range': {
-                            'startIndex': current_index,
-                            'endIndex': current_index + len(header_image.title)
-                        },
-                        'textStyle': {
-                            'italic': True
-                        },
-                        'fields': 'italic'
-                    }
-                })
-                requests.append({
-                    'updateParagraphStyle': {
-                        'range': {
-                            'startIndex': current_index,
-                            'endIndex': current_index + len(header_image.title)
-                        },
-                        'paragraphStyle': {
-                            'alignment': 'CENTER'
-                        },
-                        'fields': 'alignment'
-                    }
-                })
-                current_index += len(header_image.title) + 2
+            # If we have visuals, try to insert them
+            if visuals and len(visuals) > 0:
+                try:
+                    # Insert visuals one by one
+                    for visual in visuals:
+                        if hasattr(visual, 'file_id') and visual.file_id:
+                            # Determine where to place the visual
+                            placement_successful = await self.insert_image(
+                                document_id=doc_id, 
+                                image_id=visual.file_id
+                            )
+                            if not placement_successful:
+                                logger.warning(f"Failed to place visual {visual.title} in document {doc_id}")
+                except Exception as e:
+                    logger.error(f"Error placing visuals in document: {str(e)}")
+                    # Continue with the document creation even if visual placement fails
             
-            # Add author and date if available
-            if hasattr(article, 'author') and article.author:
-                requests.append({
-                    'insertText': {
-                        'location': {
-                            'index': current_index
-                        },
-                        'text': f"By {article.author}\n"
-                    }
-                })
-                # Format as subtle and right-aligned
-                requests.append({
-                    'updateTextStyle': {
-                        'range': {
-                            'startIndex': current_index,
-                            'endIndex': current_index + len(f"By {article.author}")
-                        },
-                        'textStyle': {
-                            'fontSize': {
-                                'magnitude': 11,
-                                'unit': 'PT'
-                            },
-                            'foregroundColor': {
-                                'color': {
-                                    'rgbColor': {
-                                        'red': 0.5,
-                                        'green': 0.5,
-                                        'blue': 0.5
-                                    }
-                                }
-                            }
-                        },
-                        'fields': 'fontSize,foregroundColor'
-                    }
-                })
-                requests.append({
-                    'updateParagraphStyle': {
-                        'range': {
-                            'startIndex': current_index,
-                            'endIndex': current_index + len(f"By {article.author}")
-                        },
-                        'paragraphStyle': {
-                            'alignment': 'END'
-                        },
-                        'fields': 'alignment'
-                    }
-                })
-                current_index += len(f"By {article.author}") + 1
-            
-            # Process introduction (first section)
-            intro_section = sections[0] if sections else {"type": "body", "content": ""}
-            requests.append({
-                'insertText': {
-                    'location': {
-                        'index': current_index
-                    },
-                    'text': intro_section["content"] + "\n\n"
-                }
-            })
-            current_index += len(intro_section["content"]) + 2
-            
-            # Add a quote card after introduction if available
-            quote_card = visual_map.get('quote_card', [None])[0]
-            if quote_card:
-                requests.append({
-                    'insertImage': {
-                        'location': {
-                            'index': current_index
-                        },
-                        'uri': await self._get_image_url(quote_card.file_path),
-                        'objectSize': {
-                            'width': {
-                                'magnitude': 500,
-                                'unit': 'PT'
-                            }
-                        }
-                    }
-                })
-                current_index += 1
-                
-                # Add caption below the quote card
-                requests.append({
-                    'insertText': {
-                        'location': {
-                            'index': current_index
-                        },
-                        'text': f"{quote_card.description}\n\n"
-                    }
-                })
-                # Format caption
-                requests.append({
-                    'updateTextStyle': {
-                        'range': {
-                            'startIndex': current_index,
-                            'endIndex': current_index + len(quote_card.description)
-                        },
-                        'textStyle': {
-                            'italic': True
-                        },
-                        'fields': 'italic'
-                    }
-                })
-                requests.append({
-                    'updateParagraphStyle': {
-                        'range': {
-                            'startIndex': current_index,
-                            'endIndex': current_index + len(quote_card.description)
-                        },
-                        'paragraphStyle': {
-                            'alignment': 'CENTER'
-                        },
-                        'fields': 'alignment'
-                    }
-                })
-                current_index += len(quote_card.description) + 2
-            
-            # Process remaining sections
-            remaining_sections = sections[1:] if len(sections) > 1 else []
-            charts = visual_map.get('chart', [])
-            infographics = visual_map.get('infographic', [])
-            chart_index = 0
-            infographic_index = 0
-            
-            for i, section in enumerate(remaining_sections):
-                # Insert section heading or content
-                if section["type"] == "heading":
-                    requests.append({
-                        'insertText': {
-                            'location': {
-                                'index': current_index
-                            },
-                            'text': section["content"] + "\n"
-                        }
-                    })
-                    # Format as heading
-                    requests.append({
-                        'updateParagraphStyle': {
-                            'range': {
-                                'startIndex': current_index,
-                                'endIndex': current_index + len(section["content"])
-                            },
-                            'paragraphStyle': {
-                                'namedStyleType': 'HEADING_2'
-                            },
-                            'fields': 'namedStyleType'
-                        }
-                    })
-                    current_index += len(section["content"]) + 1
-                else:
-                    requests.append({
-                        'insertText': {
-                            'location': {
-                                'index': current_index
-                            },
-                            'text': section["content"] + "\n\n"
-                        }
-                    })
-                    current_index += len(section["content"]) + 2
-                
-                # Strategic visual insertion based on content
-                
-                # After a heading, add a chart if available
-                if section["type"] == "heading" and chart_index < len(charts):
-                    chart = charts[chart_index]
-                    chart_index += 1
-                    
-                    requests.append({
-                        'insertImage': {
-                            'location': {
-                                'index': current_index
-                            },
-                            'uri': await self._get_image_url(chart.file_path),
-                            'objectSize': {
-                                'width': {
-                                    'magnitude': 550,
-                                    'unit': 'PT'
-                                }
-                            }
-                        }
-                    })
-                    current_index += 1
-                    
-                    # Add detailed caption for the chart
-                    caption = f"Figure {chart_index}: {chart.title} - {chart.description}\n\n"
-                    requests.append({
-                        'insertText': {
-                            'location': {
-                                'index': current_index
-                            },
-                            'text': caption
-                        }
-                    })
-                    # Format caption
-                    requests.append({
-                        'updateTextStyle': {
-                            'range': {
-                                'startIndex': current_index,
-                                'endIndex': current_index + len(caption) - 2
-                            },
-                            'textStyle': {
-                                'italic': True
-                            },
-                            'fields': 'italic'
-                        }
-                    })
-                    requests.append({
-                        'updateParagraphStyle': {
-                            'range': {
-                                'startIndex': current_index,
-                                'endIndex': current_index + len(caption) - 2
-                            },
-                            'paragraphStyle': {
-                                'alignment': 'CENTER'
-                            },
-                            'fields': 'alignment'
-                        }
-                    })
-                    current_index += len(caption)
-                    
-                # After a content block (especially if longer), add an infographic
-                elif section["type"] == "body" and len(section["content"]) > 300 and infographic_index < len(infographics):
-                    infographic = infographics[infographic_index]
-                    infographic_index += 1
-                    
-                    requests.append({
-                        'insertImage': {
-                            'location': {
-                                'index': current_index
-                            },
-                            'uri': await self._get_image_url(infographic.file_path),
-                            'objectSize': {
-                                'width': {
-                                    'magnitude': 600,
-                                    'unit': 'PT'
-                                }
-                            }
-                        }
-                    })
-                    current_index += 1
-                    
-                    # Add detailed caption with callouts for the infographic
-                    caption = f"Infographic {infographic_index}: {infographic.title}\n{infographic.description}\n\n"
-                    requests.append({
-                        'insertText': {
-                            'location': {
-                                'index': current_index
-                            },
-                            'text': caption
-                        }
-                    })
-                    # Format caption with callouts
-                    requests.append({
-                        'updateTextStyle': {
-                            'range': {
-                                'startIndex': current_index,
-                                'endIndex': current_index + len(f"Infographic {infographic_index}: {infographic.title}")
-                            },
-                            'textStyle': {
-                                'bold': True
-                            },
-                            'fields': 'bold'
-                        }
-                    })
-                    requests.append({
-                        'updateParagraphStyle': {
-                            'range': {
-                                'startIndex': current_index,
-                                'endIndex': current_index + len(caption) - 2
-                            },
-                            'paragraphStyle': {
-                                'alignment': 'CENTER'
-                            },
-                            'fields': 'alignment'
-                        }
-                    })
-                    current_index += len(caption)
-            
-            # Add any remaining visuals in a gallery section at the end
-            remaining_charts = charts[chart_index:]
-            remaining_infographics = infographics[infographic_index:]
-            remaining_visuals = remaining_charts + remaining_infographics
-            
-            if remaining_visuals:
-                requests.append({
-                    'insertText': {
-                        'location': {
-                            'index': current_index
-                        },
-                        'text': "Visual Gallery\n"
-                    }
-                })
-                # Format as heading
-                requests.append({
-                    'updateParagraphStyle': {
-                        'range': {
-                            'startIndex': current_index,
-                            'endIndex': current_index + 14
-                        },
-                        'paragraphStyle': {
-                            'namedStyleType': 'HEADING_2'
-                        },
-                        'fields': 'namedStyleType'
-                    }
-                })
-                current_index += 15  # Heading + newline
-                
-                for i, visual in enumerate(remaining_visuals):
-                    requests.append({
-                        'insertImage': {
-                            'location': {
-                                'index': current_index
-                            },
-                            'uri': await self._get_image_url(visual.file_path),
-                            'objectSize': {
-                                'width': {
-                                    'magnitude': 500,
-                                    'unit': 'PT'
-                                }
-                            }
-                        }
-                    })
-                    current_index += 1
-                    
-                    # Add a simple caption
-                    requests.append({
-                        'insertText': {
-                            'location': {
-                                'index': current_index
-                            },
-                            'text': f"{visual.title}\n\n"
-                        }
-                    })
-                    current_index += len(visual.title) + 2
-            
-            # Add Review section
-            requests.append({
-                'insertText': {
-                    'location': {
-                        'index': current_index
-                    },
-                    'text': "Review & Feedback\n"
-                }
-            })
-            # Format as heading
-            requests.append({
-                'updateParagraphStyle': {
-                    'range': {
-                        'startIndex': current_index,
-                        'endIndex': current_index + 17
-                    },
-                    'paragraphStyle': {
-                        'namedStyleType': 'HEADING_2'
-                    },
-                    'fields': 'namedStyleType'
-                }
-            })
-            current_index += 18  # Heading + newline
-            
-            # Add placeholder text for review
-            requests.append({
-                'insertText': {
-                    'location': {
-                        'index': current_index
-                    },
-                    'text': "Please add your feedback and suggestions here.\n\n"
-                }
-            })
-            
-            # Execute all requests
-            self.docs_service.documents().batchUpdate(
-                documentId=document_id,
-                body={'requests': requests}
-            ).execute()
-            
-            logger.info(f"Professional document created with ID: {document_id}")
-            return {'documentId': document_id, 'title': article.title}
+            logger.info(f"Professional document created with ID: {doc_id}")
+            return {"documentId": doc_id, "title": article.title}
             
         except Exception as e:
             logger.error(f"Failed to create professional document: {str(e)}")
-            return {}
+            return {"documentId": None}
     
     def _parse_content_into_sections(self, content: str) -> list:
         """Parse content into sections with type identification."""
@@ -1566,3 +1148,49 @@ class GoogleDocsClient:
         except Exception as e:
             logger.error(f"Error calculating body positions: {str(e)}")
             return positions
+    
+    def share_document(self, doc_id: str, email: str, role: str = 'reader') -> bool:
+        """Share a document with a specific user.
+        
+        Args:
+            doc_id (str): The ID of the document to share
+            email (str): The email address of the user to share with
+            role (str): The role to grant (reader, writer, commenter)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not doc_id:
+                logger.error("No document ID provided to share")
+                return False
+                
+            # Initialize the Drive API service with the same credentials
+            credentials_file = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_file,
+                scopes=['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive']
+            )
+            drive_service = build('drive', 'v3', credentials=credentials)
+            
+            # Create the permission
+            user_permission = {
+                'type': 'user',
+                'role': role,
+                'emailAddress': email
+            }
+            
+            # Share the document
+            drive_service.permissions().create(
+                fileId=doc_id,
+                body=user_permission,
+                fields='id',
+                sendNotificationEmail=True
+            ).execute()
+            
+            logger.info(f"Successfully shared document {doc_id} with {email} as {role}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error sharing document: {e}")
+            return False

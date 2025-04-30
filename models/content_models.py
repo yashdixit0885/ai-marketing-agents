@@ -111,7 +111,7 @@ class ContentSection:
     order: int = 0
 
 @dataclass
-class Visual:
+class VisualData:
     type: VisualType
     title: str
     description: str
@@ -134,7 +134,7 @@ class Visual:
         }
 
 @dataclass
-class Article:
+class ArticleData:
     title: str
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     subtitle: Optional[str] = None
@@ -183,7 +183,7 @@ class Article:
         }
 
 @dataclass
-class AtomicContent:
+class AtomicContentData:
     article_id: str 
     platform: str  # linkedin, twitter, medium, etc.
     content_type: str  # post, thread, carousel, etc.

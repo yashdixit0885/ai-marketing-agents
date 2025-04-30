@@ -8,9 +8,9 @@ from models import db_session
 class ResearchAgent(BaseAgent):
     """Agent responsible for conducting research on AI topics."""
     
-    def __init__(self):
+    def __init__(self, gemini_client=None):
         super().__init__("Research Agent", "Conducts deep research on AI business applications")
-        self.gemini_client = GeminiClient()
+        self.gemini_client = gemini_client or GeminiClient()
     
     async def run(self, topic):
         """Run research on the given topic."""

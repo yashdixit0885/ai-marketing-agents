@@ -2,8 +2,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.ext.declarative import declarative_base
 from config.settings import settings
+import os
 
-engine = create_engine(settings.DATABASE_URL)
+# Use environment variable if available, otherwise fallback to settings
+# Override with direct connection string if issues persist
+database_url = os.getenv("DATABASE_URL", "postgresql://yashdixit:postgres@localhost/ai_content")
+engine = create_engine(database_url)
 db_session = scoped_session(
     sessionmaker(autocommit=False, autoflush=False, bind=engine)
 )
